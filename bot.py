@@ -210,10 +210,10 @@ class MovieGenreWheel:
             outline=(0, 0, 0), width=2
         )
         
-        # Draw pointer at the top
-        pointer_tip = (center[0], center[1] - radius - self.POINTER_LENGTH)
-        pointer_left = (center[0] - self.POINTER_WIDTH, center[1] - radius + 10)
-        pointer_right = (center[0] + self.POINTER_WIDTH, center[1] - radius + 10)
+        # Draw pointer at the top - flipped so the point touches the wheel
+        pointer_tip = (center[0], center[1] - radius + 5)  # Point touches the wheel
+        pointer_left = (center[0] - self.POINTER_WIDTH, center[1] - radius - self.POINTER_LENGTH)
+        pointer_right = (center[0] + self.POINTER_WIDTH, center[1] - radius - self.POINTER_LENGTH)
         
         draw.polygon(
             [pointer_tip, pointer_left, pointer_right],
@@ -347,11 +347,29 @@ async def spin_wheel(ctx: commands.Context) -> None:
         selected_genre = bot.wheel.spin_wheel()
         gif_data = bot.wheel.create_wheel_gif(selected_genre)
         
-        # Send the GIF
+        # Send the spinning GIF
         gif_file = discord.File(fp=gif_data, filename='wheel_spinning.gif')
-        await ctx.send(file=gif_file)
+        gif_msg = await ctx.send(file=gif_file)
         
-        # Update with result
+        # Wait for the animation to finish (duration * frames + small buffer)
+        animation_duration = bot.wheel.GIF_DURATION * bot.wheel.ANIMATION_FRAMES + 0.5
+        await asyncio.sleep(animation_duration)
+        
+        # Create and send the final static wheel image
+        final_angle = bot.wheel._calculate_final_angle(selected_genre)
+        final_wheel_image = bot.wheel.create_wheel_image(final_angle)
+        
+        with io.BytesIO() as image_buffer:
+            final_wheel_image.save(image_buffer, 'PNG')
+            image_buffer.seek(0)
+            
+            final_image_file = discord.File(fp=image_buffer, filename='final_wheel.png')
+            
+            # Delete the GIF and replace with static image
+            await gif_msg.delete()
+            await ctx.send(file=final_image_file)
+        
+        # Send the result message
         await initial_msg.edit(
             content=f"🎡 The wheel has stopped! Tonight's movie genre is: **{selected_genre}**"
         )
