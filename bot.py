@@ -22,6 +22,9 @@ import numpy as np
 from discord.ext import commands
 from PIL import Image, ImageDraw, ImageFont
 
+# Local
+from movie_manager import MovieManager
+
 # Type aliases for better readability
 Color = tuple[int, int, int]
 Position = tuple[int, int]
@@ -325,7 +328,7 @@ class MovieBot(commands.Bot):
         )
         
         self.wheel = MovieGenreWheel()
-        self.current_movie = ''
+        self.manager = MovieManager()
     
     async def on_ready(self) -> None:
         """Event handler for when the bot is ready."""
@@ -510,22 +513,37 @@ async def help_wheel(ctx: commands.Context) -> None:
 
 @bot.command(name='pick_movie')
 async def pick_movie(ctx, *, movie_name):
-    """Pick a movie and save it as the current selection"""
+    """Pick a movie using fuzzy search from IMDB"""
     if not movie_name:
         await ctx.send("Please provide a movie name!")
         return
     
-    bot.current_movie = movie_name.strip()
-    await ctx.send(f"🎬 **{current_movie}** has been selected as the current movie!")
-
+    # Show searching message
+    search_msg = await ctx.send(f"🔍 Searching for **{movie_name}**...")
+    
+    # Search and select movie
+    success, message, embed = await movie_manager.pick_movie(movie_name)
+    
+    if success and embed:
+        await search_msg.edit(content=message, embed=embed)
+    else:
+        await search_msg.edit(content=message)
 
 @bot.command(name='current_movie')
-async def get_current_movie(ctx):
-    """Display the currently selected movie"""
-    if bot.current_movie:
-        await ctx.send(f"🎬 Current movie: **{bot.current_movie}**")
-    else:
+async def current_movie(ctx):
+    """Display the currently selected movie with details"""
+    current = movie_manager.get_current_movie()
+    
+    if not current:
         await ctx.send("No movie has been selected yet. Use `!pick_movie [name]` to pick one!")
+        return
+    
+    embed = movie_manager.create_current_movie_embed()
+    
+    if embed:
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send(f"🎬 Current movie: **{current}**")
 
 
 def main() -> None:
