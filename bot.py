@@ -522,7 +522,7 @@ async def pick_movie(ctx, *, movie_name):
     search_msg = await ctx.send(f"🔍 Searching for **{movie_name}**...")
     
     # Search and select movie
-    success, message, embed = await movie_manager.pick_movie(movie_name)
+    success, message, embed = await bot.manager.pick_movie(movie_name)
     
     if success and embed:
         await search_msg.edit(content=message, embed=embed)
@@ -532,13 +532,13 @@ async def pick_movie(ctx, *, movie_name):
 @bot.command(name='current_movie')
 async def current_movie(ctx):
     """Display the currently selected movie with details"""
-    current = movie_manager.get_current_movie()
+    current = bot.manager.get_current_movie()
     
     if not current:
         await ctx.send("No movie has been selected yet. Use `!pick_movie [name]` to pick one!")
         return
     
-    embed = movie_manager.create_current_movie_embed()
+    embed = bot.manager.create_current_movie_embed()
     
     if embed:
         await ctx.send(embed=embed)
