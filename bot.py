@@ -325,6 +325,7 @@ class MovieBot(commands.Bot):
         )
         
         self.wheel = MovieGenreWheel()
+        self.current_movie = ''
     
     async def on_ready(self) -> None:
         """Event handler for when the bot is ready."""
@@ -352,7 +353,7 @@ async def spin_wheel(ctx: commands.Context) -> None:
         gif_msg = await ctx.send(file=gif_file)
         
         # Wait for the animation to finish (duration * frames + small buffer)
-        animation_duration = bot.wheel.GIF_DURATION * bot.wheel.ANIMATION_FRAMES + 0.5
+        animation_duration = bot.wheel.GIF_DURATION * bot.wheel.ANIMATION_FRAMES + 1.0
         await asyncio.sleep(animation_duration)
         
         # Create and send the final static wheel image
@@ -505,6 +506,26 @@ async def help_wheel(ctx: commands.Context) -> None:
     
     embed.set_footer(text="Made with ❤️ for movie lovers")
     await ctx.send(embed=embed)
+
+
+@bot.command(name='pick_movie')
+async def pick_movie(ctx, *, movie_name):
+    """Pick a movie and save it as the current selection"""
+    if not movie_name:
+        await ctx.send("Please provide a movie name!")
+        return
+    
+    bot.current_movie = movie_name.strip()
+    await ctx.send(f"🎬 **{current_movie}** has been selected as the current movie!")
+
+
+@bot.command(name='current_movie')
+async def get_current_movie(ctx):
+    """Display the currently selected movie"""
+    if bot.current_movie:
+        await ctx.send(f"🎬 Current movie: **{bot.current_movie}**")
+    else:
+        await ctx.send("No movie has been selected yet. Use `!pick_movie [name]` to pick one!")
 
 
 def main() -> None:
