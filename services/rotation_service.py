@@ -280,19 +280,21 @@ class RotationService:
         """Get recent movie picks"""
         session = self.db.get_session()
         try:
+            from sqlalchemy.orm import joinedload
+
             # Eagerly load relationships to avoid lazy loading issues
             picks = (
                 session.query(MoviePick)
-                .join(MoviePick.picker)  # Eagerly load picker relationship
+                .options(
+                    joinedload(MoviePick.picker),  # Eagerly load picker relationship
+                    joinedload(MoviePick.ratings).joinedload(
+                        MovieRating.rater
+                    ),  # Eagerly load ratings and raters
+                )
                 .order_by(MoviePick.pick_date.desc())
                 .limit(limit)
                 .all()
             )
-
-            # Load ratings for each pick while session is still open
-            for pick in picks:
-                # Force load the ratings relationship
-                _ = len(pick.ratings)
 
             return picks
         finally:
@@ -302,20 +304,24 @@ class RotationService:
         """Get pick history for a specific user"""
         session = self.db.get_session()
         try:
+            from sqlalchemy.orm import joinedload
+
             user = session.query(User).filter(User.discord_username == username).first()
             if not user:
                 return []
 
             picks = (
                 session.query(MoviePick)
+                .options(
+                    joinedload(MoviePick.picker),  # Eagerly load picker relationship
+                    joinedload(MoviePick.ratings).joinedload(
+                        MovieRating.rater
+                    ),  # Eagerly load ratings and raters
+                )
                 .filter(MoviePick.picker_user_id == user.id)
                 .order_by(MoviePick.pick_date.desc())
                 .all()
             )
-
-            # Load ratings for each pick while session is still open
-            for pick in picks:
-                _ = len(pick.ratings)
 
             return picks
         finally:
@@ -407,7 +413,7 @@ class RotationService:
 
             embed.add_field(
                 name=f"{status} {user.real_name}",
-                value=f"@{user.discord_username}\n📅 {period_str}",
+                value=f"📅 {period_str}",
                 inline=False,
             )
 

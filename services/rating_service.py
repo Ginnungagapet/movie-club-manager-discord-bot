@@ -98,8 +98,16 @@ class RatingService:
         """Get all ratings for a specific movie"""
         session = self.db.get_session()
         try:
+            from sqlalchemy.orm import joinedload
+
             return (
                 session.query(MovieRating)
+                .options(
+                    joinedload(MovieRating.rater),  # Eagerly load rater
+                    joinedload(MovieRating.movie_pick).joinedload(
+                        MoviePick.picker
+                    ),  # Eagerly load movie_pick and its picker
+                )
                 .filter(MovieRating.movie_pick_id == movie_pick_id)
                 .order_by(MovieRating.rated_at.desc())
                 .all()
@@ -111,12 +119,20 @@ class RatingService:
         """Get all ratings by a specific user"""
         session = self.db.get_session()
         try:
+            from sqlalchemy.orm import joinedload
+
             user = session.query(User).filter(User.discord_username == username).first()
             if not user:
                 return []
 
             return (
                 session.query(MovieRating)
+                .options(
+                    joinedload(MovieRating.rater),  # Eagerly load rater
+                    joinedload(MovieRating.movie_pick).joinedload(
+                        MoviePick.picker
+                    ),  # Eagerly load movie_pick and its picker
+                )
                 .filter(MovieRating.rater_user_id == user.id)
                 .order_by(MovieRating.rated_at.desc())
                 .all()
@@ -128,8 +144,16 @@ class RatingService:
         """Get most recent ratings from all users"""
         session = self.db.get_session()
         try:
+            from sqlalchemy.orm import joinedload
+
             return (
                 session.query(MovieRating)
+                .options(
+                    joinedload(MovieRating.rater),  # Eagerly load rater
+                    joinedload(MovieRating.movie_pick).joinedload(
+                        MoviePick.picker
+                    ),  # Eagerly load movie_pick and its picker
+                )
                 .order_by(MovieRating.rated_at.desc())
                 .limit(limit)
                 .all()
@@ -142,6 +166,7 @@ class RatingService:
         session = self.db.get_session()
         try:
             from sqlalchemy import func
+            from sqlalchemy.orm import joinedload
 
             # Query movies with their average ratings
             subquery = (
@@ -155,13 +180,28 @@ class RatingService:
                 .subquery()
             )
 
-            return (
+            # Get the movie picks with eager loading
+            movie_picks = (
                 session.query(MoviePick)
+                .options(
+                    joinedload(MoviePick.picker),  # Eagerly load picker
+                    joinedload(MoviePick.ratings).joinedload(
+                        MovieRating.rater
+                    ),  # Eagerly load ratings and raters
+                )
                 .join(subquery, MoviePick.id == subquery.c.movie_pick_id)
                 .order_by(subquery.c.avg_rating.desc())
                 .limit(limit)
                 .all()
             )
+
+            # Attach the calculated values to the movie picks
+            for pick in movie_picks:
+                # Find the corresponding values from subquery
+                pick.average_rating = pick.average_rating  # This will use the @property
+                pick.rating_count = len(pick.ratings)
+
+            return movie_picks
         finally:
             session.close()
 
@@ -199,9 +239,17 @@ class RatingService:
         """Create Discord embed showing all ratings for a movie by title"""
         session = self.db.get_session()
         try:
-            # Find movie by title
+            from sqlalchemy.orm import joinedload
+
+            # Find movie by title with eager loading
             movie_pick = (
                 session.query(MoviePick)
+                .options(
+                    joinedload(MoviePick.picker),  # Eagerly load picker
+                    joinedload(MoviePick.ratings).joinedload(
+                        MovieRating.rater
+                    ),  # Eagerly load ratings and raters
+                )
                 .filter(MoviePick.movie_title.ilike(f"%{movie_title}%"))
                 .order_by(MoviePick.pick_date.desc())
                 .first()
@@ -209,8 +257,6 @@ class RatingService:
 
             if not movie_pick:
                 raise ValueError(f"Movie '{movie_title}' not found")
-
-            ratings = await self.get_movie_ratings(movie_pick.id)
 
             display_title = movie_pick.movie_title
             if movie_pick.movie_year:
@@ -225,13 +271,13 @@ class RatingService:
             if movie_pick.average_rating:
                 embed.add_field(
                     name="⭐ Average Rating",
-                    value=f"{movie_pick.average_rating:.1f}/10 ({len(ratings)} rating{'s' if len(ratings) != 1 else ''})",
+                    value=f"{movie_pick.average_rating:.1f}/10 ({len(movie_pick.ratings)} rating{'s' if len(movie_pick.ratings) != 1 else ''})",
                     inline=False,
                 )
 
             # Show individual ratings
-            if ratings:
-                for rating in ratings:
+            if movie_pick.ratings:
+                for rating in movie_pick.ratings:
                     rating_text = f"⭐ {rating.rating:.1f}/10"
                     if rating.review_text:
                         rating_text += f"\n*\"{rating.review_text[:100]}{'...' if len(rating.review_text) > 100 else ''}\"*"

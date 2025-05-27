@@ -41,7 +41,7 @@ class RotationCommands(commands.Cog):
 
             embed.add_field(
                 name="Current Period",
-                value=f"**{current_user.real_name}** (@{current_user.discord_username})\n📅 {current_start.strftime('%b %d')} - {current_end.strftime('%b %d, %Y')}",
+                value=f"**{current_user.real_name}**\n📅 {current_start.strftime('%b %d')} - {current_end.strftime('%b %d, %Y')}",
                 inline=False,
             )
 
@@ -55,7 +55,7 @@ class RotationCommands(commands.Cog):
 
             embed.add_field(
                 name="Next Up",
-                value=f"**{next_user.real_name}** (@{next_user.discord_username}){next_status}\n📅 {next_start.strftime('%b %d')} - {next_end.strftime('%b %d, %Y')}",
+                value=f"**{next_user.real_name}**{next_status}\n📅 {next_start.strftime('%b %d')} - {next_end.strftime('%b %d, %Y')}",
                 inline=False,
             )
 
