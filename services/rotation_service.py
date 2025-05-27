@@ -448,7 +448,7 @@ class RotationService:
 
             embed.add_field(
                 name=f"🎬 {movie_title}{rating_info}",
-                value=f"Picked by {pick.picker.real_name} (@{pick.picker.discord_username})\n📅 {pick.pick_date.strftime('%b %d, %Y')}",
+                value=f"Picked by {pick.picker.real_name}\n📅 {pick.pick_date.strftime('%b %d, %Y')}",
                 inline=True,
             )
 
