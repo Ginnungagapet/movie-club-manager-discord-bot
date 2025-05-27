@@ -3,6 +3,7 @@ Rotation service for managing movie club scheduling (FIXED)
 """
 
 import discord
+import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple, Any
 from models.database import DatabaseManager, User, MoviePick, MovieRating, RotationState
