@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     CheckConstraint,
     JSON,
+    Float,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -93,7 +94,7 @@ class MovieRating(Base):
     id = Column(Integer, primary_key=True)
     movie_pick_id = Column(Integer, ForeignKey("movie_picks.id"), nullable=False)
     rater_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    rating = Column(Integer, nullable=False)
+    rating = Column(Float, nullable=False)
     review_text = Column(Text)
     rated_at = Column(DateTime, default=func.now())
 

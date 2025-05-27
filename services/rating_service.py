@@ -19,11 +19,11 @@ class RatingService:
         self.db = DatabaseManager(settings.database_url_corrected)
 
     async def add_movie_rating(
-        self, username: str, movie_pick_id: int, rating: float, review_text: str = None
+        self, username: str, movie_title: str, rating: float, review_text: str = None
     ) -> MovieRating:
-        """Add or update a movie rating"""
+        """Add or update a movie rating by movie title"""
         if rating < 1.0 or rating > 10.0:
-            raise ValueError("Rating must be between 1 and 10")
+            raise ValueError("Rating must be between 1.0 and 10.0")
 
         session = self.db.get_session()
         try:
@@ -31,17 +31,22 @@ class RatingService:
             if not user:
                 raise ValueError(f"User {username} not found")
 
+            # Find movie by title (get the most recent pick with that title)
             movie_pick = (
-                session.query(MoviePick).filter(MoviePick.id == movie_pick_id).first()
+                session.query(MoviePick)
+                .filter(MoviePick.movie_title.ilike(f"%{movie_title}%"))
+                .order_by(MoviePick.pick_date.desc())
+                .first()
             )
+
             if not movie_pick:
-                raise ValueError(f"Movie pick {movie_pick_id} not found")
+                raise ValueError(f"Movie '{movie_title}' not found in picks")
 
             # Check if rating already exists
             existing_rating = (
                 session.query(MovieRating)
                 .filter(
-                    MovieRating.movie_pick_id == movie_pick_id,
+                    MovieRating.movie_pick_id == movie_pick.id,
                     MovieRating.rater_user_id == user.id,
                 )
                 .first()
@@ -52,17 +57,21 @@ class RatingService:
                 existing_rating.rating = rating
                 existing_rating.review_text = review_text
                 movie_rating = existing_rating
-                logger.info(f"Updated rating for movie {movie_pick_id} by {username}")
+                logger.info(
+                    f"Updated rating for movie {movie_pick.movie_title} by {username}"
+                )
             else:
                 # Create new rating
                 movie_rating = MovieRating(
-                    movie_pick_id=movie_pick_id,
+                    movie_pick_id=movie_pick.id,
                     rater_user_id=user.id,
                     rating=rating,
                     review_text=review_text,
                 )
                 session.add(movie_rating)
-                logger.info(f"Added new rating for movie {movie_pick_id} by {username}")
+                logger.info(
+                    f"Added new rating for movie {movie_pick.movie_title} by {username}"
+                )
 
             session.commit()
             session.refresh(movie_rating)
@@ -186,24 +195,29 @@ class RatingService:
         finally:
             session.close()
 
-    async def create_ratings_embed(self, movie_pick_id: int) -> discord.Embed:
-        """Create Discord embed showing all ratings for a movie"""
+    async def create_ratings_embed(self, movie_title: str) -> discord.Embed:
+        """Create Discord embed showing all ratings for a movie by title"""
         session = self.db.get_session()
         try:
+            # Find movie by title
             movie_pick = (
-                session.query(MoviePick).filter(MoviePick.id == movie_pick_id).first()
+                session.query(MoviePick)
+                .filter(MoviePick.movie_title.ilike(f"%{movie_title}%"))
+                .order_by(MoviePick.pick_date.desc())
+                .first()
             )
+
             if not movie_pick:
-                raise ValueError("Movie pick not found")
+                raise ValueError(f"Movie '{movie_title}' not found")
 
-            ratings = await self.get_movie_ratings(movie_pick_id)
+            ratings = await self.get_movie_ratings(movie_pick.id)
 
-            movie_title = movie_pick.movie_title
+            display_title = movie_pick.movie_title
             if movie_pick.movie_year:
-                movie_title += f" ({movie_pick.movie_year})"
+                display_title += f" ({movie_pick.movie_year})"
 
             embed = discord.Embed(
-                title=f"🎬 {movie_title}",
+                title=f"🎬 {display_title}",
                 description=f"Picked by {movie_pick.picker.real_name}",
                 color=0x00FF00,
             )
@@ -218,7 +232,7 @@ class RatingService:
             # Show individual ratings
             if ratings:
                 for rating in ratings:
-                    rating_text = f"⭐ {rating.rating}/10"
+                    rating_text = f"⭐ {rating.rating:.1f}/10"
                     if rating.review_text:
                         rating_text += f"\n*\"{rating.review_text[:100]}{'...' if len(rating.review_text) > 100 else ''}\"*"
 
@@ -275,18 +289,29 @@ class RatingService:
         finally:
             session.close()
 
-    async def delete_rating(self, username: str, movie_pick_id: int) -> bool:
-        """Delete a user's rating for a movie"""
+    async def delete_rating(self, username: str, movie_title: str) -> bool:
+        """Delete a user's rating for a movie by title"""
         session = self.db.get_session()
         try:
             user = session.query(User).filter(User.discord_username == username).first()
             if not user:
                 return False
 
+            # Find movie by title
+            movie_pick = (
+                session.query(MoviePick)
+                .filter(MoviePick.movie_title.ilike(f"%{movie_title}%"))
+                .order_by(MoviePick.pick_date.desc())
+                .first()
+            )
+
+            if not movie_pick:
+                return False
+
             rating = (
                 session.query(MovieRating)
                 .filter(
-                    MovieRating.movie_pick_id == movie_pick_id,
+                    MovieRating.movie_pick_id == movie_pick.id,
                     MovieRating.rater_user_id == user.id,
                 )
                 .first()
@@ -295,7 +320,9 @@ class RatingService:
             if rating:
                 session.delete(rating)
                 session.commit()
-                logger.info(f"Deleted rating for movie {movie_pick_id} by {username}")
+                logger.info(
+                    f"Deleted rating for movie {movie_pick.movie_title} by {username}"
+                )
                 return True
 
             return False

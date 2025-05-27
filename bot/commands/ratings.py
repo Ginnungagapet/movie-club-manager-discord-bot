@@ -1,10 +1,15 @@
 """
-Movie rating system commands
+Movie rating system commands - Updated for float ratings and movie titles
 """
 
 import discord
 from discord.ext import commands
 import logging
+from utils.parsers import (
+    parse_movie_title_and_review,
+    validate_rating,
+    fuzzy_match_movie_title,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,51 +22,115 @@ class RatingCommands(commands.Cog):
         self.rating_service = bot.services["rating"]
         self.rotation_service = bot.services["rotation"]
 
-    @commands.command(name="rate")
-    async def rate_movie(self, ctx, movie_id: int, rating: int, *, review: str = None):
+    async def _get_available_movie_titles(self) -> list[str]:
+        """Get list of all available movie titles for fuzzy matching"""
+        try:
+            recent_picks = await self.rotation_service.get_recent_picks(
+                limit=100
+            )  # Get many movies
+            return [pick.movie_title for pick in recent_picks]
+        except:
+            return []
+
+    async def _find_movie_by_title(self, search_title: str) -> tuple[str, str]:
         """
-        Rate a movie pick
-        Usage: !rate 5 8 Great movie!
-               !rate 5 7
+        Find movie by title with fuzzy matching
+        Returns: (actual_title, display_title_with_year)
+        """
+        session = self.rating_service.db.get_session()
+        try:
+            from models.database import MoviePick
+
+            # Try exact match first (case insensitive)
+            movie_pick = (
+                session.query(MoviePick)
+                .filter(MoviePick.movie_title.ilike(f"%{search_title}%"))
+                .order_by(MoviePick.pick_date.desc())
+                .first()
+            )
+
+            if movie_pick:
+                display_title = movie_pick.movie_title
+                if movie_pick.movie_year:
+                    display_title += f" ({movie_pick.movie_year})"
+                return movie_pick.movie_title, display_title
+
+            # Try fuzzy matching
+            available_titles = await self._get_available_movie_titles()
+            best_match = fuzzy_match_movie_title(search_title, available_titles)
+
+            if best_match:
+                movie_pick = (
+                    session.query(MoviePick)
+                    .filter(MoviePick.movie_title == best_match)
+                    .order_by(MoviePick.pick_date.desc())
+                    .first()
+                )
+
+                if movie_pick:
+                    display_title = movie_pick.movie_title
+                    if movie_pick.movie_year:
+                        display_title += f" ({movie_pick.movie_year})"
+                    return movie_pick.movie_title, display_title
+
+            # Not found
+            raise ValueError(f"Movie '{search_title}' not found")
+
+        finally:
+            session.close()
+
+    @commands.command(name="rate")
+    async def rate_movie(self, ctx, rating: float, *, movie_and_review: str):
+        """
+        Rate a movie by title (accepts float ratings 1.0-10.0)
+        Usage: !rate 8.5 The Matrix
+               !rate 9.2 The Matrix Amazing movie with great effects!
+               !rate 7.0 Blade Runner 2049 Visually stunning but slow paced
         """
         username = ctx.author.name
 
-        if (
-            rating < self.bot.settings.min_rating
-            or rating > self.bot.settings.max_rating
-        ):
+        # Validate rating
+        if not validate_rating(rating):
+            await ctx.send(f"❌ Rating must be between 1.0 and 10.0!")
+            return
+
+        if not movie_and_review:
             await ctx.send(
-                f"❌ Rating must be between {self.bot.settings.min_rating} and {self.bot.settings.max_rating}!"
+                "❌ Please provide a movie title! Usage: `!rate 8.5 The Matrix`"
             )
             return
 
         try:
-            movie_rating = await self.rating_service.add_movie_rating(
-                username, movie_id, rating, review
+            # Get available movie titles for better parsing
+            available_titles = await self._get_available_movie_titles()
+
+            # Parse movie title and review
+            movie_title, review_text = parse_movie_title_and_review(
+                movie_and_review, available_titles
             )
 
-            # Get the movie details
-            movie_pick = await self.rating_service.get_movie_pick(movie_id)
+            # Find the actual movie
+            actual_title, display_title = await self._find_movie_by_title(movie_title)
 
-            if movie_pick:
-                movie_title = f"{movie_pick.movie_title}"
-                if movie_pick.movie_year:
-                    movie_title += f" ({movie_pick.movie_year})"
-            else:
-                movie_title = f"Movie ID {movie_id}"
+            # Add the rating
+            movie_rating = await self.rating_service.add_movie_rating(
+                username, actual_title, rating, review_text
+            )
 
             embed = discord.Embed(
                 title="⭐ Rating Added!",
-                description=f"You rated **{movie_title}** {rating}/10",
+                description=f"You rated **{display_title}** {rating}/10",
                 color=0x00FF00,
             )
 
-            if review:
-                embed.add_field(name="Your Review", value=f'*"{review}"*', inline=False)
+            if review_text:
+                embed.add_field(
+                    name="Your Review", value=f'*"{review_text}"*', inline=False
+                )
 
             embed.add_field(
                 name="View All Ratings",
-                value=f"Use `!movie_ratings {movie_id}` to see all ratings for this movie",
+                value=f"Use `!movie_ratings {actual_title}` to see all ratings",
                 inline=False,
             )
 
@@ -72,13 +141,17 @@ class RatingCommands(commands.Cog):
             await ctx.send(f"❌ Error adding rating: {str(e)}")
 
     @commands.command(name="movie_ratings")
-    async def show_movie_ratings(self, ctx, movie_id: int):
-        """Show all ratings for a specific movie"""
+    async def show_movie_ratings(self, ctx, *, movie_title: str):
+        """Show all ratings for a specific movie by title"""
         try:
-            embed = await self.rating_service.create_ratings_embed(movie_id)
+            # Find the movie
+            actual_title, display_title = await self._find_movie_by_title(movie_title)
+
+            embed = await self.rating_service.create_ratings_embed(actual_title)
             await ctx.send(embed=embed)
+
         except Exception as e:
-            logger.error(f"Error showing ratings for movie {movie_id}: {e}")
+            logger.error(f"Error showing ratings for movie {movie_title}: {e}")
             await ctx.send(f"❌ Error showing ratings: {str(e)}")
 
     @commands.command(name="my_ratings")
@@ -106,7 +179,7 @@ class RatingCommands(commands.Cog):
                 if rating.movie_pick.movie_year:
                     movie_title += f" ({rating.movie_pick.movie_year})"
 
-                rating_text = f"⭐ {rating.rating}/10"
+                rating_text = f"⭐ {rating.rating:.1f}/10"
                 if rating.review_text:
                     rating_text += f"\n*\"{rating.review_text[:50]}{'...' if len(rating.review_text) > 50 else ''}\"*"
 
@@ -175,7 +248,7 @@ class RatingCommands(commands.Cog):
                 if rating.movie_pick.movie_year:
                     movie_title += f" ({rating.movie_pick.movie_year})"
 
-                rating_text = f"⭐ {rating.rating}/10 by {rating.rater.real_name}"
+                rating_text = f"⭐ {rating.rating:.1f}/10 by {rating.rater.real_name}"
                 if rating.review_text:
                     rating_text += f"\n*\"{rating.review_text[:100]}{'...' if len(rating.review_text) > 100 else ''}\"*"
 
@@ -188,38 +261,38 @@ class RatingCommands(commands.Cog):
             await ctx.send(f"❌ Error showing recent ratings: {str(e)}")
 
     @commands.command(name="update_rating")
-    async def update_rating(
-        self, ctx, movie_id: int, new_rating: int, *, new_review: str = None
-    ):
+    async def update_rating(self, ctx, new_rating: float, *, movie_and_review: str):
         """
         Update your existing rating for a movie
-        Usage: !update_rating 5 9 Even better on second viewing!
+        Usage: !update_rating 9.5 The Matrix Even better on second viewing!
+               !update_rating 8.0 Blade Runner 2049
         """
         username = ctx.author.name
 
-        if (
-            new_rating < self.bot.settings.min_rating
-            or new_rating > self.bot.settings.max_rating
-        ):
-            await ctx.send(
-                f"❌ Rating must be between {self.bot.settings.min_rating} and {self.bot.settings.max_rating}!"
-            )
+        if not validate_rating(new_rating):
+            await ctx.send(f"❌ Rating must be between 1.0 and 10.0!")
             return
 
         try:
-            # This will update if rating exists, or create new if it doesn't
-            movie_rating = await self.rating_service.add_movie_rating(
-                username, movie_id, new_rating, new_review
+            # Get available movie titles for better parsing
+            available_titles = await self._get_available_movie_titles()
+
+            # Parse movie title and review
+            movie_title, new_review = parse_movie_title_and_review(
+                movie_and_review, available_titles
             )
 
-            movie_pick = await self.rating_service.get_movie_pick(movie_id)
-            movie_title = f"{movie_pick.movie_title}"
-            if movie_pick.movie_year:
-                movie_title += f" ({movie_pick.movie_year})"
+            # Find the actual movie
+            actual_title, display_title = await self._find_movie_by_title(movie_title)
+
+            # Update the rating (this will update if exists, create if doesn't)
+            movie_rating = await self.rating_service.add_movie_rating(
+                username, actual_title, new_rating, new_review
+            )
 
             embed = discord.Embed(
                 title="⭐ Rating Updated!",
-                description=f"Updated rating for **{movie_title}** to {new_rating}/10",
+                description=f"Updated rating for **{display_title}** to {new_rating:.1f}/10",
                 color=0x00FF00,
             )
 
@@ -233,6 +306,140 @@ class RatingCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Error updating rating: {e}")
             await ctx.send(f"❌ Error updating rating: {str(e)}")
+
+    @commands.command(name="rating_stats")
+    async def show_rating_stats(self, ctx, *, username: str = None):
+        """
+        Show rating statistics for yourself or another user
+        Usage: !rating_stats
+               !rating_stats @someone
+        """
+        if username:
+            # Remove @ if present
+            username = username.lstrip("@")
+        else:
+            username = ctx.author.name
+
+        try:
+            stats = await self.rating_service.get_user_rating_stats(username)
+
+            if stats["total_ratings"] == 0:
+                user_display = (
+                    username if username == ctx.author.name else f"@{username}"
+                )
+                await ctx.send(f"{user_display} hasn't rated any movies yet!")
+                return
+
+            # Get user info
+            user = await self.rotation_service.get_user_by_username(username)
+            user_name = user.real_name if user else username
+
+            embed = discord.Embed(
+                title=f"📊 {user_name}'s Rating Statistics", color=0x0099FF
+            )
+
+            embed.add_field(
+                name="Total Ratings", value=str(stats["total_ratings"]), inline=True
+            )
+
+            embed.add_field(
+                name="Average Rating",
+                value=f"{stats['average_rating']:.1f}/10",
+                inline=True,
+            )
+
+            embed.add_field(
+                name="Rating Range",
+                value=f"{stats['min_rating']:.1f} - {stats['max_rating']:.1f}",
+                inline=True,
+            )
+
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error showing rating stats: {e}")
+            await ctx.send(f"❌ Error showing rating statistics: {str(e)}")
+
+    @commands.command(name="delete_rating")
+    async def delete_rating(self, ctx, *, movie_title: str):
+        """
+        Delete your rating for a movie
+        Usage: !delete_rating The Matrix
+        """
+        username = ctx.author.name
+
+        try:
+            # Find the movie
+            actual_title, display_title = await self._find_movie_by_title(movie_title)
+
+            # Delete the rating
+            success = await self.rating_service.delete_rating(username, actual_title)
+
+            if success:
+                embed = discord.Embed(
+                    title="🗑️ Rating Deleted",
+                    description=f"Deleted your rating for **{display_title}**",
+                    color=0x00FF00,
+                )
+            else:
+                embed = discord.Embed(
+                    title="❌ Rating Not Found",
+                    description=f"You haven't rated **{display_title}** yet",
+                    color=0xFF0000,
+                )
+
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error deleting rating: {e}")
+            await ctx.send(f"❌ Error deleting rating: {str(e)}")
+
+    @commands.command(name="rate_help")
+    async def rating_help(self, ctx):
+        """Show help for rating commands with examples"""
+        embed = discord.Embed(
+            title="⭐ Rating System Help",
+            description="How to use the movie rating system",
+            color=0x0099FF,
+        )
+
+        embed.add_field(
+            name="Rate a Movie",
+            value="`!rate 8.5 The Matrix`\n`!rate 9.2 Blade Runner 2049 Amazing visuals!`",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="View Ratings",
+            value="`!movie_ratings The Matrix`\n`!my_ratings`\n`!top_rated`",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Update/Delete",
+            value="`!update_rating 9.0 The Matrix`\n`!delete_rating The Matrix`",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Statistics",
+            value="`!rating_stats` - Your stats\n`!recent_ratings` - Latest ratings",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Rating Scale",
+            value="1.0 - 10.0 (decimals allowed)\n1.0 = Terrible, 5.0 = Average, 10.0 = Perfect",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Tips",
+            value="• Movie titles are fuzzy matched - close spellings work\n• Reviews are optional but encouraged\n• You can update ratings anytime",
+            inline=False,
+        )
+
+        await ctx.send(embed=embed)
 
 
 async def setup(bot):
