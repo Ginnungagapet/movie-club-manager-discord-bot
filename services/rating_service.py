@@ -19,10 +19,10 @@ class RatingService:
         self.db = DatabaseManager(settings.database_url_corrected)
 
     async def add_movie_rating(
-        self, username: str, movie_pick_id: int, rating: int, review_text: str = None
+        self, username: str, movie_pick_id: int, rating: float, review_text: str = None
     ) -> MovieRating:
         """Add or update a movie rating"""
-        if rating < 1 or rating > 10:
+        if rating < 1.0 or rating > 10.0:
             raise ValueError("Rating must be between 1 and 10")
 
         session = self.db.get_session()
