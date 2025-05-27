@@ -147,7 +147,9 @@ class AdminCommands(commands.Cog):
                 name="Pick Date", value=pick_date.strftime("%b %d, %Y"), inline=True
             )
             embed.add_field(
-                name="Movie ID", value=f"{movie_pick.id} (for ratings)", inline=False
+                name="Movie Added",
+                value=f"Use `!rate [1.0-10.0] {movie_pick.movie_title}` to rate this movie",
+                inline=False,
             )
 
             await ctx.send(embed=embed)
@@ -155,48 +157,6 @@ class AdminCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Error adding historical pick: {e}")
             await ctx.send(f"❌ Error adding historical pick: {str(e)}")
-
-    @commands.command(name="backfill_history")
-    @commands.has_permissions(administrator=True)
-    async def backfill_history(self, ctx):
-        """
-        Quick command to backfill known history (Admin only)
-        Adds Paul's Event Horizon and Derek's Sunshine picks
-        """
-        try:
-            # Add Paul's Event Horizon (estimated mid-period date)
-            paul_pick = await self.rotation_service.add_historical_pick(
-                "paul", "Event Horizon", 1997, datetime(2025, 5, 12)
-            )
-
-            # Add Derek's Sunshine (estimated mid-period date)
-            derek_pick = await self.rotation_service.add_historical_pick(
-                "derek", "Sunshine", 2007, datetime(2025, 5, 26)
-            )
-
-            embed = discord.Embed(
-                title="✅ History Backfilled",
-                description="Added both historical movie picks!",
-                color=0x00FF00,
-            )
-
-            embed.add_field(
-                name="Paul's Pick",
-                value=f"Event Horizon (1997) - ID: {paul_pick.id}",
-                inline=False,
-            )
-
-            embed.add_field(
-                name="Derek's Pick",
-                value=f"Sunshine (2007) - ID: {derek_pick.id}",
-                inline=False,
-            )
-
-            await ctx.send(embed=embed)
-
-        except Exception as e:
-            logger.error(f"Error backfilling history: {e}")
-            await ctx.send(f"❌ Error backfilling history: {str(e)}")
 
     @commands.command(name="delete_pick")
     @commands.has_permissions(administrator=True)

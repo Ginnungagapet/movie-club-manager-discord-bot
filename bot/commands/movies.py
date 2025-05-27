@@ -1,5 +1,5 @@
 """
-Movie selection and management commands
+Movie selection and management commands (Updated - No Movie ID references)
 """
 
 import discord
@@ -81,8 +81,11 @@ class MovieCommands(commands.Cog):
                 embed = create_movie_embed(
                     movie_details, f"🎬 Movie Selected by {real_name}!"
                 )
+
+                # Update footer to show how to rate (no movie ID)
+                movie_title_for_rating = movie_info["title"]
                 embed.set_footer(
-                    text=f"Movie ID: {movie_pick.id} • Use !rate {movie_pick.id} [1-10] to rate this movie"
+                    text=f"Rate this movie: !rate [1.0-10.0] {movie_title_for_rating}"
                 )
 
                 await search_msg.edit(content="", embed=embed)
@@ -90,7 +93,7 @@ class MovieCommands(commands.Cog):
                 # Show congratulations message
                 congrats_embed = discord.Embed(
                     title="🎉 Movie Selected!",
-                    description=f"Thanks for your pick, {real_name}!\n\nOthers can now rate this movie using `!rate {movie_pick.id} [rating]`",
+                    description=f"Thanks for your pick, {real_name}!\n\nOthers can now rate this movie using `!rate [rating] {movie_title_for_rating}`",
                     color=0x00FF00,
                 )
                 await ctx.send(embed=congrats_embed)
@@ -117,6 +120,8 @@ class MovieCommands(commands.Cog):
 
         if movie_details:
             embed = create_movie_embed(movie_details, "🎬 Current Movie")
+            # Add rating instruction without movie ID
+            embed.set_footer(text=f"Rate this movie: !rate [1.0-10.0] {current}")
             await ctx.send(embed=embed)
         else:
             await ctx.send(f"🎬 Current movie: **{current}**")
@@ -163,6 +168,8 @@ class MovieCommands(commands.Cog):
 
             if success and movie_details:
                 embed = create_movie_embed(movie_details, "🎬 Movie Found")
+                # Remove any movie ID references from footer
+                embed.set_footer(text="Movie information from IMDB")
                 await search_msg.edit(content="", embed=embed)
             else:
                 await search_msg.edit(content=message)

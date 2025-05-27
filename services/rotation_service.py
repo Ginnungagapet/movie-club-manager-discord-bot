@@ -1,14 +1,11 @@
 """
-Rotation service for managing movie club scheduling
+Rotation service for managing movie club scheduling (FIXED)
 """
 
 import discord
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple, Any
-import logging
-
-from models.database import DatabaseManager, User, MoviePick, RotationState
-from models.schemas import validate_rotation_setup, validate_movie_pick
+from models.database import DatabaseManager, User, MoviePick, MovieRating, RotationState
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +29,13 @@ class RotationService:
 
     async def setup_rotation(self, user_data: List[Tuple[str, str]]):
         """Set up the rotation with user data"""
-        # Validate input data
-        schema = validate_rotation_setup(user_data)
-
         session = self.db.get_session()
         try:
             # Clear existing users
             session.query(User).delete()
 
             # Add new users with rotation positions
-            for position, (username, real_name) in enumerate(schema.user_data):
+            for position, (username, real_name) in enumerate(user_data):
                 user = User(
                     discord_username=username,
                     real_name=real_name,
@@ -92,11 +86,34 @@ class RotationService:
         session = self.db.get_session()
         try:
             rotation_state = session.query(RotationState).first()
-            if not rotation_state or not rotation_state.current_user:
+            if not rotation_state or not rotation_state.rotation_start_date:
                 raise ValueError("No rotation state set up")
 
-            period_start, period_end = await self._get_current_period_dates()
-            return rotation_state.current_user, period_start, period_end
+            # Calculate current period based on time elapsed
+            now = datetime.now()
+            start_date = rotation_state.rotation_start_date
+            days_since_start = (now - start_date).days
+            periods_passed = days_since_start // 14  # 14-day periods
+
+            # Get all users ordered by rotation position
+            users = session.query(User).order_by(User.rotation_position).all()
+            if not users:
+                raise ValueError("No users in rotation")
+
+            # Calculate current user position
+            current_position = periods_passed % len(users)
+            current_user = users[current_position]
+
+            # Calculate period dates
+            current_period_start = start_date + timedelta(days=periods_passed * 14)
+            current_period_end = current_period_start + timedelta(days=14)
+
+            # Update rotation state if needed
+            if rotation_state.current_user_id != current_user.id:
+                rotation_state.current_user_id = current_user.id
+                session.commit()
+
+            return current_user, current_period_start, current_period_end
 
         finally:
             session.close()
@@ -119,9 +136,7 @@ class RotationService:
             )
 
             period_start = current_end
-            period_end = period_start + timedelta(
-                days=self.settings.rotation_period_days
-            )
+            period_end = period_start + timedelta(days=14)
 
             return next_user, period_start, period_end
 
@@ -147,9 +162,7 @@ class RotationService:
 
             # Next picker can pick during early access window
             if user.id == next_user.id:
-                early_access_start = next_start - timedelta(
-                    days=self.settings.early_access_days
-                )
+                early_access_start = next_start - timedelta(days=7)
                 if early_access_start <= now < next_start:
                     days_until = (next_start - now).days
                     return (
@@ -163,9 +176,7 @@ class RotationService:
             if user.id == current_user.id:
                 return False, "Your picking period hasn't started yet"
             elif user.id == next_user.id:
-                early_access_start = next_start - timedelta(
-                    days=self.settings.early_access_days
-                )
+                early_access_start = next_start - timedelta(days=7)
                 days_until_access = (early_access_start - now).days
                 return False, f"Your early access starts in {days_until_access} days"
             else:
@@ -183,11 +194,6 @@ class RotationService:
         movie_details: dict = None,
     ) -> MoviePick:
         """Add a movie pick to the database"""
-        # Validate input
-        schema = validate_movie_pick(
-            username, movie_title, movie_year, imdb_id, movie_details
-        )
-
         session = self.db.get_session()
         try:
             user = session.query(User).filter(User.discord_username == username).first()
@@ -198,10 +204,10 @@ class RotationService:
 
             movie_pick = MoviePick(
                 picker_user_id=user.id,
-                movie_title=schema.movie_title,
-                movie_year=schema.movie_year,
-                imdb_id=schema.imdb_id,
-                movie_details=schema.movie_details,
+                movie_title=movie_title,
+                movie_year=movie_year,
+                imdb_id=imdb_id,
+                movie_details=movie_details or {},
                 period_start_date=period_start.date(),
                 period_end_date=period_end.date(),
             )
@@ -242,12 +248,8 @@ class RotationService:
             start_date = rotation_state.rotation_start_date
             user_position = user.rotation_position
 
-            period_start = start_date + timedelta(
-                days=self.settings.rotation_period_days * user_position
-            )
-            period_end = period_start + timedelta(
-                days=self.settings.rotation_period_days
-            )
+            period_start = start_date + timedelta(days=14 * user_position)
+            period_end = period_start + timedelta(days=14)
 
             movie_pick = MoviePick(
                 picker_user_id=user.id,
@@ -277,12 +279,21 @@ class RotationService:
         """Get recent movie picks"""
         session = self.db.get_session()
         try:
-            return (
+            # Eagerly load relationships to avoid lazy loading issues
+            picks = (
                 session.query(MoviePick)
+                .join(MoviePick.picker)  # Eagerly load picker relationship
                 .order_by(MoviePick.pick_date.desc())
                 .limit(limit)
                 .all()
             )
+
+            # Load ratings for each pick while session is still open
+            for pick in picks:
+                # Force load the ratings relationship
+                _ = len(pick.ratings)
+
+            return picks
         finally:
             session.close()
 
@@ -294,12 +305,18 @@ class RotationService:
             if not user:
                 return []
 
-            return (
+            picks = (
                 session.query(MoviePick)
                 .filter(MoviePick.picker_user_id == user.id)
                 .order_by(MoviePick.pick_date.desc())
                 .all()
             )
+
+            # Load ratings for each pick while session is still open
+            for pick in picks:
+                _ = len(pick.ratings)
+
+            return picks
         finally:
             session.close()
 
@@ -333,42 +350,35 @@ class RotationService:
         finally:
             session.close()
 
-    async def _get_current_period_dates(self) -> Tuple[datetime, datetime]:
-        """Calculate current period start and end dates"""
+    async def get_schedule(
+        self, periods: int = 5
+    ) -> List[Tuple[User, datetime, datetime, bool]]:
+        """Get upcoming schedule"""
         session = self.db.get_session()
         try:
-            rotation_state = session.query(RotationState).first()
-            if not rotation_state or not rotation_state.rotation_start_date:
-                raise ValueError("No rotation start date set")
-
-            now = datetime.now()
-            days_since_start = (now - rotation_state.rotation_start_date).days
-            periods_passed = days_since_start // self.settings.rotation_period_days
-
-            current_period_start = rotation_state.rotation_start_date + timedelta(
-                days=periods_passed * self.settings.rotation_period_days
-            )
-            current_period_end = current_period_start + timedelta(
-                days=self.settings.rotation_period_days
-            )
-
-            # Check if we need to update current user
             users = session.query(User).order_by(User.rotation_position).all()
-            if users:
-                expected_position = periods_passed % len(users)
-                current_user = rotation_state.current_user
+            if not users:
+                return []
 
-                if (
-                    not current_user
-                    or current_user.rotation_position != expected_position
-                ):
-                    new_current_user = next(
-                        u for u in users if u.rotation_position == expected_position
-                    )
-                    rotation_state.current_user_id = new_current_user.id
-                    session.commit()
+            current_user, current_start, current_end = await self.get_current_picker()
+            schedule = []
 
-            return current_period_start, current_period_end
+            for i in range(periods):
+                position = (current_user.rotation_position + i) % len(users)
+                user = next(u for u in users if u.rotation_position == position)
+
+                if i == 0:
+                    period_start = current_start
+                    period_end = current_end
+                    is_current = True
+                else:
+                    period_start = current_end + timedelta(days=14 * (i - 1))
+                    period_end = period_start + timedelta(days=14)
+                    is_current = False
+
+                schedule.append((user, period_start, period_end, is_current))
+
+            return schedule
 
         finally:
             session.close()
@@ -423,11 +433,11 @@ class RotationService:
             if pick.movie_year:
                 movie_title += f" ({pick.movie_year})"
 
+            # Calculate average rating (ratings were loaded in get_recent_picks)
             rating_info = ""
-            if pick.average_rating:
-                rating_info = (
-                    f" ⭐ {pick.average_rating:.1f}/10 ({pick.rating_count} ratings)"
-                )
+            if pick.ratings:
+                avg_rating = sum(r.rating for r in pick.ratings) / len(pick.ratings)
+                rating_info = f" ⭐ {avg_rating:.1f}/10 ({len(pick.ratings)} ratings)"
 
             embed.add_field(
                 name=f"🎬 {movie_title}{rating_info}",
@@ -436,40 +446,3 @@ class RotationService:
             )
 
         return embed
-
-    async def get_schedule(
-        self, periods: int = 5
-    ) -> List[Tuple[User, datetime, datetime, bool]]:
-        """Get upcoming schedule"""
-        session = self.db.get_session()
-        try:
-            users = session.query(User).order_by(User.rotation_position).all()
-            if not users:
-                return []
-
-            current_user, current_start, current_end = await self.get_current_picker()
-            schedule = []
-
-            for i in range(periods):
-                position = (current_user.rotation_position + i) % len(users)
-                user = next(u for u in users if u.rotation_position == position)
-
-                if i == 0:
-                    period_start = current_start
-                    period_end = current_end
-                    is_current = True
-                else:
-                    period_start = current_end + timedelta(
-                        days=self.settings.rotation_period_days * (i - 1)
-                    )
-                    period_end = period_start + timedelta(
-                        days=self.settings.rotation_period_days
-                    )
-                    is_current = False
-
-                schedule.append((user, period_start, period_end, is_current))
-
-            return schedule
-
-        finally:
-            session.close()
