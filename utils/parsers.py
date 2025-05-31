@@ -119,13 +119,6 @@ def parse_movie_title_and_review(
     Examples:
         "The Matrix Amazing effects" -> ("The Matrix", "Amazing effects")
         "Blade Runner 2049 Visually stunning" -> ("Blade Runner 2049", "Visually stunning")
-
-    Args:
-        input_str: Combined movie title and review string
-        known_movies: List of known movie titles to help with parsing
-
-    Returns:
-        Tuple of (movie_title, review_text)
     """
     if not input_str:
         return "", None
@@ -134,25 +127,65 @@ def parse_movie_title_and_review(
 
     # If we have known movies, try to match against them
     if known_movies:
-        for movie in known_movies:
+        # Sort by length (longest first) to match longer titles first
+        sorted_movies = sorted(known_movies, key=len, reverse=True)
+
+        for movie in sorted_movies:
+            # Case-insensitive matching
             if input_str.lower().startswith(movie.lower()):
                 remaining = input_str[len(movie) :].strip()
                 return movie, remaining if remaining else None
 
-    # Fallback: assume first few words are title
+            # Also try fuzzy matching for the whole input
+            # This helps when user types most of the title
+            if len(input_str.split()) <= 5:  # Reasonable movie title length
+                match = fuzzy_match_movie_title(input_str, [movie])
+                if match:
+                    return match, None
+
+    # Improved fallback: Try to identify where the review might start
+    # Look for common review starter words
+    review_starters = [
+        "amazing",
+        "great",
+        "good",
+        "bad",
+        "terrible",
+        "awesome",
+        "excellent",
+        "horrible",
+        "boring",
+        "fantastic",
+        "brilliant",
+        "awful",
+        "perfect",
+        "loved",
+        "hated",
+        "enjoyed",
+        "disliked",
+        "best",
+        "worst",
+        "beautiful",
+        "stunning",
+        "disappointing",
+        "incredible",
+        "outstanding",
+        "mediocre",
+    ]
+
     words = input_str.split()
-    if len(words) <= 2:
-        return input_str, None
-    elif len(words) <= 4:
-        # For 3-4 words, assume first 2 are title
-        title = " ".join(words[:2])
-        review = " ".join(words[2:])
-        return title, review
-    else:
-        # For longer strings, assume first 3 words are title
-        title = " ".join(words[:3])
-        review = " ".join(words[3:])
-        return title, review
+
+    # Look for review starter words
+    for i, word in enumerate(words):
+        if word.lower() in review_starters and i > 0:
+            # Found a likely review start
+            title = " ".join(words[:i])
+            review = " ".join(words[i:])
+            return title, review
+
+    # If no review starters found, assume the whole thing is the title
+    # (user can always use !update_rating to add a review later)
+    return input_str, None
 
 
 def parse_command_args(args_str: str, expected_args: List[str]) -> Dict[str, Any]:
