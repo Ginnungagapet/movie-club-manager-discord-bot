@@ -70,6 +70,16 @@ class MoviePick(Base):
         "MovieRating", back_populates="movie_pick", cascade="all, delete-orphan"
     )
 
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint(
+            "picker_user_id",
+            "period_start_date",
+            "period_end_date",
+            name="unique_user_period_pick",
+        ),
+    )
+
     def __repr__(self):
         return f"<MoviePick(title='{self.movie_title}', year={self.movie_year}, picker='{self.picker.real_name if self.picker else 'Unknown'}')>"
 

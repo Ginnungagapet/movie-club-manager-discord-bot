@@ -18,8 +18,6 @@ class MovieService:
     def __init__(self, settings):
         self.settings = settings
         self.ia = IMDb()
-        self.current_movie: Optional[str] = None
-        self.current_movie_details: Optional[Dict[str, Any]] = None
 
     async def search_movie(
         self, query: str, year: Optional[int] = None
@@ -60,16 +58,12 @@ class MovieService:
             # Get detailed movie information
             detailed_movie = await self._get_movie_details(best_match)
 
-            # Cache the movie selection
-            self.current_movie = detailed_movie["title"]
-            self.current_movie_details = detailed_movie
-
             # Create response message
             actual_year = detailed_movie.get("year")
             if year and actual_year and actual_year != year:
-                message = f"🎬 **{self.current_movie}** found! (Found {actual_year}, searched for {year})"
+                message = f"🎬 **{detailed_movie['title']}** found! (Found {actual_year}, searched for {year})"
             else:
-                message = f"🎬 **{self.current_movie}** found!"
+                message = f"🎬 **{detailed_movie['title']}** found!"
 
             return True, message, detailed_movie
 

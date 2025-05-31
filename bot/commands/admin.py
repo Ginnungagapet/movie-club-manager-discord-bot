@@ -66,32 +66,9 @@ class AdminCommands(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def advance_rotation(self, ctx):
         """Manually advance to the next person in rotation (Admin only)"""
-        try:
-            success = await self.rotation_service.advance_rotation()
-
-            if success:
-                current_user, current_start, current_end = (
-                    await self.rotation_service.get_current_picker()
-                )
-
-                embed = discord.Embed(
-                    title="⏭️ Rotation Advanced",
-                    description=f"Now it's **{current_user.real_name}**'s turn (@{current_user.discord_username})",
-                    color=0x00FF00,
-                )
-                embed.add_field(
-                    name="Period",
-                    value=f"{current_start.strftime('%b %d')} - {current_end.strftime('%b %d, %Y')}",
-                    inline=False,
-                )
-
-                await ctx.send(embed=embed)
-            else:
-                await ctx.send("❌ Error advancing rotation")
-
-        except Exception as e:
-            logger.error(f"Error advancing rotation: {e}")
-            await ctx.send(f"❌ Error advancing rotation: {str(e)}")
+        await ctx.send(
+            "❌ Manual rotation advancement is no longer supported. The rotation advances automatically based on time."
+        )
 
     @commands.command(name="add_historical_pick")
     @commands.has_permissions(administrator=True)
@@ -123,12 +100,18 @@ class AdminCommands(commands.Cog):
             else:
                 pick_date = datetime.now()
 
-            # Add historical pick
+            # Get the user
+            user = await self.rotation_service.get_user_by_username(username)
+            if not user:
+                await ctx.send(f"❌ User @{username} not found in rotation")
+                return
+
+            # Calculate which period this pick should belong to based on the date
+
+            # Add historical pick with calculated period
             movie_pick = await self.rotation_service.add_historical_pick(
                 username, movie_title, movie_year, pick_date
             )
-
-            user = await self.rotation_service.get_user_by_username(username)
 
             embed = discord.Embed(
                 title="✅ Historical Pick Added",
@@ -138,9 +121,7 @@ class AdminCommands(commands.Cog):
 
             embed.add_field(
                 name="Picker",
-                value=(
-                    f"{user.real_name} (@{user.discord_username})" if user else username
-                ),
+                value=f"{user.real_name} (@{user.discord_username})",
                 inline=True,
             )
             embed.add_field(
@@ -161,7 +142,7 @@ class AdminCommands(commands.Cog):
     @commands.command(name="delete_pick")
     @commands.has_permissions(administrator=True)
     async def delete_pick(self, ctx, movie_id: int):
-        """Delete a movie pick (Admin only)"""
+        """Delete a movie pick by ID (Admin only)"""
         try:
             success = await self.rotation_service.delete_movie_pick(movie_id)
 
@@ -183,6 +164,83 @@ class AdminCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Error deleting pick {movie_id}: {e}")
             await ctx.send(f"❌ Error deleting pick: {str(e)}")
+
+    @commands.command(name="force_pick")
+    @commands.has_permissions(administrator=True)
+    async def force_pick(self, ctx, username: str, *, movie_input: str):
+        """Force a movie pick for any user (Admin only)"""
+        try:
+            from utils.parsers import parse_movie_input
+
+            # Parse movie input
+            movie_name, year = parse_movie_input(movie_input)
+
+            # Get user
+            user = await self.rotation_service.get_user_by_username(username)
+            if not user:
+                await ctx.send(f"❌ User @{username} not found")
+                return
+
+            # Search for movie
+            search_msg = await ctx.send(f"🔍 Searching for **{movie_name}**...")
+            success, message, movie_details = await self.movie_service.search_movie(
+                movie_name, year
+            )
+
+            if not success or not movie_details:
+                await search_msg.edit(content=message)
+                return
+
+            # Extract movie info
+            movie_info = self.movie_service.extract_movie_info(movie_details)
+
+            # Determine the period for this user
+            current_user, current_start, current_end = (
+                await self.rotation_service.get_current_picker()
+            )
+
+            # Force the pick for the appropriate period
+            if user.id == current_user.id:
+                # Current picker
+                movie_pick = await self.rotation_service.add_or_update_movie_pick(
+                    username=username,
+                    movie_title=movie_info["title"],
+                    movie_year=movie_info["year"],
+                    imdb_id=movie_info["imdb_id"],
+                    movie_details=movie_info,
+                    is_early_access=False,
+                )
+                period_text = "current period"
+            else:
+                # Check if they're next
+                next_user, _, _ = await self.rotation_service.get_next_picker()
+                if user.id == next_user.id:
+                    movie_pick = await self.rotation_service.add_or_update_movie_pick(
+                        username=username,
+                        movie_title=movie_info["title"],
+                        movie_year=movie_info["year"],
+                        imdb_id=movie_info["imdb_id"],
+                        movie_details=movie_info,
+                        is_early_access=True,
+                    )
+                    period_text = "next period (early access)"
+                else:
+                    await search_msg.edit(
+                        content=f"❌ {user.real_name} is not current or next in rotation. Use `!add_historical_pick` for past picks."
+                    )
+                    return
+
+            embed = discord.Embed(
+                title="✅ Movie Pick Forced",
+                description=f"Set **{movie_info['title']}** as {user.real_name}'s pick for {period_text}",
+                color=0x00FF00,
+            )
+
+            await search_msg.edit(content="", embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error forcing pick: {e}")
+            await ctx.send(f"❌ Error forcing pick: {str(e)}")
 
     @commands.command(name="reset_rotation")
     @commands.has_permissions(administrator=True)
@@ -259,6 +317,14 @@ class AdminCommands(commands.Cog):
                 value=f"Period: {stats['current_period']}\nDays Remaining: {stats['days_remaining']}",
                 inline=False,
             )
+
+            # Add current movie info
+            current_pick = await self.rotation_service.get_current_movie_pick()
+            if current_pick:
+                movie_text = current_pick.movie_title
+                if current_pick.movie_year:
+                    movie_text += f" ({current_pick.movie_year})"
+                embed.add_field(name="Current Movie", value=movie_text, inline=False)
 
             await ctx.send(embed=embed)
 

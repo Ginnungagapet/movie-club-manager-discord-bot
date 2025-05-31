@@ -18,7 +18,7 @@ class RotationCommands(commands.Cog):
 
     @commands.command(name="schedule")
     async def show_schedule(self, ctx, periods: int = 5):
-        """Show the upcoming rotation schedule"""
+        """Show the upcoming rotation schedule with pick status"""
         try:
             embed = await self.rotation_service.create_schedule_embed(periods)
             await ctx.send(embed=embed)
@@ -39,25 +39,56 @@ class RotationCommands(commands.Cog):
 
             embed = discord.Embed(title="🎯 Current Picker", color=0x00FF00)
 
+            # Check if current picker has picked
+            current_pick = await self.rotation_service.get_current_movie_pick()
+            current_status = " ✅" if current_pick else " ⏳"
+
             embed.add_field(
-                name="Current Period",
+                name=f"Current Period{current_status}",
                 value=f"**{current_user.real_name}**\n📅 {current_start.strftime('%b %d')} - {current_end.strftime('%b %d, %Y')}",
                 inline=False,
             )
 
-            # Check if next person has early access
+            if current_pick:
+                movie_title = current_pick.movie_title
+                if current_pick.movie_year:
+                    movie_title += f" ({current_pick.movie_year})"
+                embed.add_field(
+                    name="Current Movie", value=f"🎬 {movie_title}", inline=False
+                )
+
+            # Check if next person has early access and if they've picked
             can_pick_next, reason = await self.rotation_service.can_user_pick(
                 next_user.discord_username
             )
+
+            # Check if they've already picked
+            next_pick = await self.rotation_service.get_user_active_pick(
+                next_user.discord_username
+            )
+
             next_status = ""
             if can_pick_next and "Early access" in reason:
-                next_status = " 🚪 *Early Access Open*"
+                if next_pick:
+                    next_status = " 🚪✅ *Early Access - Already Picked*"
+                else:
+                    next_status = " 🚪 *Early Access Open*"
 
             embed.add_field(
-                name="Next Up",
+                name=f"Next Up{' ✅' if next_pick and not next_status else ''}",
                 value=f"**{next_user.real_name}**{next_status}\n📅 {next_start.strftime('%b %d')} - {next_end.strftime('%b %d, %Y')}",
                 inline=False,
             )
+
+            if next_pick and not current_pick:
+                movie_title = next_pick.movie_title
+                if next_pick.movie_year:
+                    movie_title += f" ({next_pick.movie_year})"
+                embed.add_field(
+                    name="Pre-selected Movie",
+                    value=f"🎬 {movie_title} (will become current on {next_start.strftime('%b %d')})",
+                    inline=False,
+                )
 
             await ctx.send(embed=embed)
 
@@ -73,15 +104,35 @@ class RotationCommands(commands.Cog):
         try:
             can_pick, reason = await self.rotation_service.can_user_pick(username)
 
+            # Check if user has already picked
+            user_pick = await self.rotation_service.get_user_active_pick(username)
+
             if can_pick:
                 embed = discord.Embed(
                     title="🎯 Your Turn!", description=f"✅ {reason}", color=0x00FF00
                 )
-                embed.add_field(
-                    name="How to Pick",
-                    value="Use `!pick_movie [movie name]` to select your movie!",
-                    inline=False,
-                )
+
+                if user_pick:
+                    movie_title = user_pick.movie_title
+                    if user_pick.movie_year:
+                        movie_title += f" ({user_pick.movie_year})"
+
+                    embed.add_field(
+                        name="Your Current Pick",
+                        value=f"🎬 {movie_title}",
+                        inline=False,
+                    )
+                    embed.add_field(
+                        name="Want to change it?",
+                        value="Use `!pick_movie [new movie]` to select a different movie!",
+                        inline=False,
+                    )
+                else:
+                    embed.add_field(
+                        name="How to Pick",
+                        value="Use `!pick_movie [movie name]` to select your movie!",
+                        inline=False,
+                    )
             else:
                 embed = discord.Embed(
                     title="⏰ Not Your Turn", description=f"❌ {reason}", color=0xFF6600

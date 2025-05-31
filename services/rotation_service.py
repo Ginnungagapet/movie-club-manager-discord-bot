@@ -194,38 +194,19 @@ class RotationService:
         imdb_id: str = None,
         movie_details: dict = None,
     ) -> MoviePick:
-        """Add a movie pick to the database"""
-        session = self.db.get_session()
-        try:
-            user = session.query(User).filter(User.discord_username == username).first()
-            if not user:
-                raise ValueError(f"User {username} not found")
-
-            current_user, period_start, period_end = await self.get_current_picker()
-
-            movie_pick = MoviePick(
-                picker_user_id=user.id,
-                movie_title=movie_title,
-                movie_year=movie_year,
-                imdb_id=imdb_id,
-                movie_details=movie_details or {},
-                period_start_date=period_start.date(),
-                period_end_date=period_end.date(),
-            )
-
-            session.add(movie_pick)
-            session.commit()
-            session.refresh(movie_pick)
-
-            logger.info(f"Added movie pick: {movie_title} by {username}")
-            return movie_pick
-
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Error adding movie pick: {e}")
-            raise
-        finally:
-            session.close()
+        """
+        DEPRECATED: Use add_or_update_movie_pick instead
+        This method is kept for backward compatibility
+        """
+        logger.warning("add_movie_pick is deprecated, use add_or_update_movie_pick")
+        return await self.add_or_update_movie_pick(
+            username=username,
+            movie_title=movie_title,
+            movie_year=movie_year,
+            imdb_id=imdb_id,
+            movie_details=movie_details,
+            is_early_access=False,
+        )
 
     async def add_historical_pick(
         self,
@@ -391,7 +372,7 @@ class RotationService:
             session.close()
 
     async def create_schedule_embed(self, periods: int = 5) -> discord.Embed:
-        """Create Discord embed showing rotation schedule"""
+        """Create Discord embed showing rotation schedule with pick status"""
         schedule = await self.get_schedule(periods)
 
         embed = discord.Embed(
@@ -403,17 +384,35 @@ class RotationService:
         for i, (user, start, end, is_current) in enumerate(schedule):
             status = "🎯 **CURRENT**" if is_current else f"#{i + 1}"
 
+            # Check if user has picked for their period
+            picks = await self.get_picks_for_period(start, end)
+            user_pick = next((p for p in picks if p.picker_user_id == user.id), None)
+
+            if user_pick:
+                status += " ✅"
+
             # Check if next person is in early access
             if i == 1:
                 can_pick, reason = await self.can_user_pick(user.discord_username)
                 if "Early access" in reason:
-                    status += " 🚪 *Early Access Open*"
+                    if user_pick:
+                        status += " 🚪✅ *Early Access - Already Picked*"
+                    else:
+                        status += " 🚪 *Early Access Open*"
 
             period_str = f"{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
 
+            # Build the value string
+            value_str = f"📅 {period_str}"
+            if user_pick:
+                movie_title = user_pick.movie_title
+                if user_pick.movie_year:
+                    movie_title += f" ({user_pick.movie_year})"
+                value_str += f"\n🎬 {movie_title}"
+
             embed.add_field(
                 name=f"{status} {user.real_name}",
-                value=f"📅 {period_str}",
+                value=value_str,
                 inline=False,
             )
 
@@ -453,3 +452,293 @@ class RotationService:
             )
 
         return embed
+
+
+async def delete_movie_pick(self, movie_id: int) -> bool:
+    """Delete a movie pick by ID"""
+    session = self.db.get_session()
+    try:
+        movie_pick = session.query(MoviePick).filter(MoviePick.id == movie_id).first()
+
+        if movie_pick:
+            session.delete(movie_pick)
+            session.commit()
+            logger.info(f"Deleted movie pick ID {movie_id}")
+            return True
+
+        return False
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error deleting movie pick: {e}")
+        return False
+    finally:
+        session.close()
+
+
+async def reset_all_data(self):
+    """Reset all rotation data - USE WITH CAUTION"""
+    session = self.db.get_session()
+    try:
+        # Delete all data in order to respect foreign keys
+        session.query(MovieRating).delete()
+        session.query(MoviePick).delete()
+        session.query(RotationState).delete()
+        session.query(User).delete()
+
+        session.commit()
+
+        # Re-initialize rotation state
+        self.db.init_rotation_state()
+
+        logger.warning("All rotation data has been reset!")
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error resetting rotation data: {e}")
+        raise
+    finally:
+        session.close()
+
+
+async def get_admin_stats(self) -> dict:
+    """Get admin statistics"""
+    session = self.db.get_session()
+    try:
+        from sqlalchemy import func
+
+        # User stats
+        total_users = session.query(User).count()
+        active_users = (
+            session.query(User).filter(User.rotation_position.isnot(None)).count()
+        )
+
+        # Movie stats
+        total_picks = session.query(MoviePick).count()
+        rated_movies = session.query(MoviePick).join(MovieRating).distinct().count()
+
+        # Rating stats
+        total_ratings = session.query(MovieRating).count()
+        avg_rating_result = session.query(func.avg(MovieRating.rating)).scalar()
+        average_rating = float(avg_rating_result) if avg_rating_result else 0.0
+
+        # Current rotation info
+        try:
+            current_user, current_start, current_end = await self.get_current_picker()
+            current_period = f"{current_user.real_name} ({current_start.strftime('%b %d')} - {current_end.strftime('%b %d')})"
+            days_remaining = (current_end - datetime.now()).days
+        except:
+            current_period = "Not set up"
+            days_remaining = 0
+
+        return {
+            "total_users": total_users,
+            "active_users": active_users,
+            "total_picks": total_picks,
+            "rated_movies": rated_movies,
+            "total_ratings": total_ratings,
+            "average_rating": average_rating,
+            "current_period": current_period,
+            "days_remaining": days_remaining,
+        }
+
+    finally:
+        session.close()
+
+
+async def add_or_update_movie_pick(
+    self,
+    username: str,
+    movie_title: str,
+    movie_year: int = None,
+    imdb_id: str = None,
+    movie_details: dict = None,
+    is_early_access: bool = False,
+) -> MoviePick:
+    """Add or update a movie pick for the user's current/upcoming period"""
+    session = self.db.get_session()
+    try:
+        from sqlalchemy.orm import joinedload
+
+        user = session.query(User).filter(User.discord_username == username).first()
+        if not user:
+            raise ValueError(f"User {username} not found")
+
+        # Determine which period this pick is for
+        current_user, current_start, current_end = await self.get_current_picker()
+
+        if is_early_access:
+            # This is a future pick - get the next period for this user
+            next_user, next_start, next_end = await self.get_next_picker()
+            if user.id != next_user.id:
+                raise ValueError("User is not eligible for early access")
+            period_start = next_start.date()
+            period_end = next_end.date()
+        else:
+            # This is a current pick
+            if user.id != current_user.id:
+                raise ValueError("User is not the current picker")
+            period_start = current_start.date()
+            period_end = current_end.date()
+
+        # Check if user already has a pick for this period
+        existing_pick = (
+            session.query(MoviePick)
+            .filter(
+                MoviePick.picker_user_id == user.id,
+                MoviePick.period_start_date == period_start,
+                MoviePick.period_end_date == period_end,
+            )
+            .first()
+        )
+
+        if existing_pick:
+            # Update existing pick
+            existing_pick.movie_title = movie_title
+            existing_pick.movie_year = movie_year
+            existing_pick.imdb_id = imdb_id
+            existing_pick.movie_details = movie_details or {}
+            existing_pick.pick_date = datetime.now()
+
+            session.commit()
+            session.refresh(existing_pick)
+
+            logger.info(f"Updated movie pick: {movie_title} by {username}")
+            return existing_pick
+        else:
+            # Create new pick
+            movie_pick = MoviePick(
+                picker_user_id=user.id,
+                movie_title=movie_title,
+                movie_year=movie_year,
+                imdb_id=imdb_id,
+                movie_details=movie_details or {},
+                pick_date=datetime.now(),
+                period_start_date=period_start,
+                period_end_date=period_end,
+            )
+
+            session.add(movie_pick)
+            session.commit()
+            session.refresh(movie_pick)
+
+            logger.info(f"Added movie pick: {movie_title} by {username}")
+            return movie_pick
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error adding/updating movie pick: {e}")
+        raise
+    finally:
+        session.close()
+
+
+async def get_current_movie_pick(self) -> Optional[MoviePick]:
+    """Get the movie pick for the current period"""
+    session = self.db.get_session()
+    try:
+        from sqlalchemy.orm import joinedload
+
+        # Get current period dates
+        current_user, current_start, current_end = await self.get_current_picker()
+
+        # Find pick for current period
+        current_pick = (
+            session.query(MoviePick)
+            .options(
+                joinedload(MoviePick.picker),
+                joinedload(MoviePick.ratings).joinedload(MovieRating.rater),
+            )
+            .filter(
+                MoviePick.picker_user_id == current_user.id,
+                MoviePick.period_start_date == current_start.date(),
+                MoviePick.period_end_date == current_end.date(),
+            )
+            .first()
+        )
+
+        return current_pick
+
+    finally:
+        session.close()
+
+
+async def get_user_active_pick(self, username: str) -> Optional[MoviePick]:
+    """Get user's active pick (current period or upcoming period if in early access)"""
+    session = self.db.get_session()
+    try:
+        from sqlalchemy.orm import joinedload
+
+        user = session.query(User).filter(User.discord_username == username).first()
+        if not user:
+            return None
+
+        # Check if user is current picker
+        current_user, current_start, current_end = await self.get_current_picker()
+
+        if user.id == current_user.id:
+            # Look for current period pick
+            return (
+                session.query(MoviePick)
+                .options(
+                    joinedload(MoviePick.picker),
+                    joinedload(MoviePick.ratings).joinedload(MovieRating.rater),
+                )
+                .filter(
+                    MoviePick.picker_user_id == user.id,
+                    MoviePick.period_start_date == current_start.date(),
+                    MoviePick.period_end_date == current_end.date(),
+                )
+                .first()
+            )
+        else:
+            # Check if user is next picker
+            next_user, next_start, next_end = await self.get_next_picker()
+
+            if user.id == next_user.id:
+                # Look for next period pick (early access)
+                return (
+                    session.query(MoviePick)
+                    .options(
+                        joinedload(MoviePick.picker),
+                        joinedload(MoviePick.ratings).joinedload(MovieRating.rater),
+                    )
+                    .filter(
+                        MoviePick.picker_user_id == user.id,
+                        MoviePick.period_start_date == next_start.date(),
+                        MoviePick.period_end_date == next_end.date(),
+                    )
+                    .first()
+                )
+
+        return None
+
+    finally:
+        session.close()
+
+
+async def get_picks_for_period(
+    self, period_start: datetime, period_end: datetime
+) -> List[MoviePick]:
+    """Get all picks for a specific period"""
+    session = self.db.get_session()
+    try:
+        from sqlalchemy.orm import joinedload
+
+        picks = (
+            session.query(MoviePick)
+            .options(
+                joinedload(MoviePick.picker),
+                joinedload(MoviePick.ratings).joinedload(MovieRating.rater),
+            )
+            .filter(
+                MoviePick.period_start_date == period_start.date(),
+                MoviePick.period_end_date == period_end.date(),
+            )
+            .all()
+        )
+
+        return picks
+
+    finally:
+        session.close()
