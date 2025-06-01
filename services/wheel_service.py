@@ -87,8 +87,9 @@ class WheelService:
     FULL_ROTATIONS: Final[int] = 3
     GIF_DURATION: Final[float] = 0.07
 
-    def __init__(self) -> None:
+    def __init__(self, settings) -> None:
         """Initialize the wheel with default genres."""
+        self.settings = settings
         self.genres = self.DEFAULT_GENRES.copy()
 
     def spin_wheel(self) -> str:
