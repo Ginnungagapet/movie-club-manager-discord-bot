@@ -5,6 +5,8 @@ Wheel management commands
 import discord
 from discord.ext import commands
 import logging
+import asyncio
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +18,16 @@ class WheelCommands(commands.Cog):
         self.bot = bot
         self.wheel_service = bot.services["wheel"]
 
-    @bot.command(name="spin")
-    async def spin_wheel(ctx: commands.Context) -> None:
+    @commands.command(name="spin")
+    async def spin_wheel(self, ctx: commands.Context) -> None:
         """Spin the wheel and select a random movie genre with GIF animation."""
         try:
             # Send initial message
             initial_msg = await ctx.send("🎡 Spinning the movie genre wheel...")
 
             # Select random genre and create animation
-            selected_genre = bot.wheel.spin_wheel()
-            gif_data = bot.wheel.create_wheel_gif(selected_genre)
+            selected_genre = self.wheel_service.spin_wheel()
+            gif_data = self.wheel_service.create_wheel_gif(selected_genre)
 
             # Send the spinning GIF
             gif_file = discord.File(fp=gif_data, filename="wheel_spinning.gif")
@@ -33,13 +35,14 @@ class WheelCommands(commands.Cog):
 
             # Wait for the animation to finish (duration * frames + small buffer)
             animation_duration = (
-                bot.wheel.GIF_DURATION * bot.wheel.ANIMATION_FRAMES + 1.0
+                self.wheel_service.GIF_DURATION * self.wheel_service.ANIMATION_FRAMES
+                + 1.0
             )
             await asyncio.sleep(animation_duration)
 
             # Create and send the final static wheel image
-            final_angle = bot.wheel._calculate_final_angle(selected_genre)
-            final_wheel_image = bot.wheel.create_wheel_image(final_angle)
+            final_angle = self.wheel_service._calculate_final_angle(selected_genre)
+            final_wheel_image = self.wheel_service.create_wheel_image(final_angle)
 
             with io.BytesIO() as image_buffer:
                 final_wheel_image.save(image_buffer, "PNG")
@@ -61,37 +64,37 @@ class WheelCommands(commands.Cog):
         except ValueError as e:
             await ctx.send(f"❌ Error: {e}")
         except Exception as e:
+            logger.error(f"Error in spin command: {e}")
             await ctx.send("❌ An unexpected error occurred while spinning the wheel.")
-            print(f"Error in spin command: {e}")
 
-    @bot.command(name="add_genre")
-    async def add_genre(ctx: commands.Context, *, genre: str) -> None:
+    @commands.command(name="add_genre")
+    async def add_genre(self, ctx: commands.Context, *, genre: str) -> None:
         """Add a new genre to the wheel."""
         if not genre.strip():
             await ctx.send("❌ Please provide a genre name.")
             return
 
-        if bot.wheel.add_genre(genre):
+        if self.wheel_service.add_genre(genre):
             await ctx.send(f'✅ Added "{genre}" to the wheel!')
         else:
             await ctx.send(f'❌ "{genre}" is already on the wheel!')
 
-    @bot.command(name="remove_genre")
-    async def remove_genre(ctx: commands.Context, *, genre: str) -> None:
+    @commands.command(name="remove_genre")
+    async def remove_genre(self, ctx: commands.Context, *, genre: str) -> None:
         """Remove a genre from the wheel."""
         if not genre.strip():
             await ctx.send("❌ Please provide a genre name.")
             return
 
-        if bot.wheel.remove_genre(genre):
+        if self.wheel_service.remove_genre(genre):
             await ctx.send(f'✅ Removed "{genre}" from the wheel!')
         else:
             await ctx.send(f'❌ "{genre}" was not found on the wheel!')
 
-    @bot.command(name="list_genres")
-    async def list_genres(ctx: commands.Context) -> None:
+    @commands.command(name="list_genres")
+    async def list_genres(self, ctx: commands.Context) -> None:
         """List all genres currently on the wheel with visual representation."""
-        genres = bot.wheel.genre_list
+        genres = self.wheel_service.genre_list
 
         if not genres:
             await ctx.send("❌ No genres available on the wheel.")
@@ -101,7 +104,7 @@ class WheelCommands(commands.Cog):
 
         # Create and send wheel image
         try:
-            wheel_image = bot.wheel.create_wheel_image()
+            wheel_image = self.wheel_service.create_wheel_image()
 
             with io.BytesIO() as image_buffer:
                 wheel_image.save(image_buffer, "PNG")
@@ -114,7 +117,45 @@ class WheelCommands(commands.Cog):
                 )
         except Exception as e:
             # Fallback to text-only if image generation fails
+            logger.error(f"Error generating wheel image: {e}")
             await ctx.send(
                 f"**Movie Genres on the Wheel ({len(genres)} total)**:\n{genres_text}"
             )
-            print(f"Error generating wheel image: {e}")
+
+    @commands.command(name="wheel_help")
+    async def wheel_help(self, ctx: commands.Context) -> None:
+        """Show help for wheel commands."""
+        embed = discord.Embed(
+            title="🎡 Wheel Commands Help",
+            description="Spin the movie genre wheel to pick a random genre!",
+            color=0xFF69B4,
+        )
+
+        embed.add_field(
+            name="Spin the Wheel",
+            value="`!spin` - Spin the wheel with animation",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Manage Genres",
+            value=(
+                "`!add_genre <genre>` - Add a new genre\n"
+                "`!remove_genre <genre>` - Remove a genre\n"
+                "`!list_genres` - Show all genres with wheel image"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Current Genres",
+            value=f"{len(self.wheel_service.genre_list)} genres on the wheel",
+            inline=False,
+        )
+
+        await ctx.send(embed=embed)
+
+
+async def setup(bot):
+    """Setup function for loading the cog"""
+    await bot.add_cog(WheelCommands(bot))

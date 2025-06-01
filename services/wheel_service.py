@@ -1,18 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import io
 import math
-import os
 import secrets
-from datetime import datetime
-from pathlib import Path
-from typing import Final, Optional
+from typing import Final
 
-import discord
 import imageio
-import numpy as np
-from discord.ext import commands
 from PIL import Image, ImageDraw, ImageFont
 
 # Type aliases for better readability
