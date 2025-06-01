@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 from services.movie_service import MovieService
 from services.rotation_service import RotationService
 from services.rating_service import RatingService
+from services.wheel_service import WheelService
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,14 @@ class MovieClubBot(commands.Bot):
         self.movie_service = MovieService(settings)
         self.rotation_service = RotationService(settings)
         self.rating_service = RatingService(settings)
+        self.wheel_service = WheelService(settings)
 
         # Store services for commands to access
         self.services = {
             "movie": self.movie_service,
             "rotation": self.rotation_service,
             "rating": self.rating_service,
+            "wheel": self.wheel_service,
         }
 
     async def setup_hook(self):
@@ -68,6 +71,7 @@ class MovieClubBot(commands.Bot):
             "bot.commands.movies",
             "bot.commands.ratings",
             "bot.commands.admin",
+            "bot.commands.wheel",
         ]
 
         for module in command_modules:
