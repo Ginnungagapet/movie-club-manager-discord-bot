@@ -64,7 +64,7 @@ class AdminCommands(commands.Cog):
 
     @commands.command(name="skip_current_pick")
     @commands.has_permissions(administrator=True)
-    async def skip_next_pick(self, ctx, *, reason: str = None):
+    async def skip_current_pick(self, ctx, *, reason: str = None):
         """
         Skip the current picker in the rotation (Admin only)
         The next person will become the current picker instead.
