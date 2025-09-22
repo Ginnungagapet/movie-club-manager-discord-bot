@@ -132,14 +132,9 @@ class WheelCommands(commands.Cog):
         )
 
         embed.add_field(
-            name="Spin the Wheel",
-            value="`!spin` - Spin the wheel with animation",
-            inline=False,
-        )
-
-        embed.add_field(
-            name="Manage Genres",
+            name="Wheel Commands",
             value=(
+                "`!spin` - Spin the wheel with animation\n"
                 "`!add_genre <genre>` - Add a new genre\n"
                 "`!remove_genre <genre>` - Remove a genre\n"
                 "`!list_genres` - Show all genres with wheel image"
@@ -148,8 +143,24 @@ class WheelCommands(commands.Cog):
         )
 
         embed.add_field(
-            name="Current Genres",
-            value=f"{len(self.wheel_service.genre_list)} genres on the wheel",
+            name="Movie Picker Commands",
+            value=(
+                "`!pick_movie <title> <optional: year>` - Pick a movie. Only works if you're currently picking or up next.\n"
+                "`!current_movie` - Show the current movie\n"
+                "`!movie_status` - Show if a movie has been picked and what it is\n"
+                "`!search_movie <title> <optional: year>` - Search for a movie in IMDB. Useful before picking."
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Schedule Commands",
+            value=(
+                "`!pick_movie <periods, default=5>` - Show the upcoming rotation schedule, for the next <periods> users.\n"
+                "`!who_picks` - Show the current picker\n"
+                "`!history <num, default=10>` - Show the last <num> movie picks\n"
+                "`!my_picks` - Show your movie pick history."
+            ),
             inline=False,
         )
 
