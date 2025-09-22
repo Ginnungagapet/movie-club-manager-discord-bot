@@ -156,7 +156,7 @@ class WheelCommands(commands.Cog):
         embed.add_field(
             name="Schedule Commands",
             value=(
-                "`!pick_movie <periods, default=5>` - Show the upcoming rotation schedule, for the next <periods> users.\n"
+                "`!schedule <periods, default=5>` - Show the upcoming rotation schedule, for the next <periods> users.\n"
                 "`!who_picks` - Show the current picker\n"
                 "`!history <num, default=10>` - Show the last <num> movie picks\n"
                 "`!my_picks` - Show your movie pick history."
