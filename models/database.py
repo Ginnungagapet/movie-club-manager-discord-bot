@@ -144,6 +144,36 @@ class RotationState(Base):
         return f"<RotationState(current_user='{self.current_user.real_name if self.current_user else 'None'}', start_date='{self.rotation_start_date}')>"
 
 
+class RotationSkip(Base):
+    """Tracks skipped periods in the rotation"""
+
+    __tablename__ = "rotation_skips"
+
+    id = Column(Integer, primary_key=True)
+    skipped_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    original_start_date = Column(Date, nullable=False)
+    original_end_date = Column(Date, nullable=False)
+    skip_reason = Column(String(200))
+    skipped_at = Column(DateTime, default=func.now())
+    skipped_by = Column(String(50))  # Discord username who initiated the skip
+
+    # Relationships
+    skipped_user = relationship("User")
+
+    # Unique constraint to prevent double-skipping the same period
+    __table_args__ = (
+        UniqueConstraint(
+            "skipped_user_id",
+            "original_start_date",
+            "original_end_date",
+            name="unique_user_period_skip",
+        ),
+    )
+
+    def __repr__(self):
+        return f"<RotationSkip(user='{self.skipped_user.real_name if self.skipped_user else 'Unknown'}', period='{self.original_start_date} to {self.original_end_date}')>"
+
+
 class DatabaseManager:
     """Manages database connections and operations"""
 

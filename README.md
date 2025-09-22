@@ -57,7 +57,7 @@ A comprehensive Discord bot for managing movie club activities with biweekly rot
 - `!setup_rotation <user_list>` - Set up the rotation order
   - Format: `user1:RealName1,user2:RealName2,user3:RealName3`
   - Example: `!setup_rotation paul:Paul,derek:Derek,greg:Greg`
-- `!advance_rotation` - Manually advance to next person in rotation
+- `!skip_pick` - Manually advance to next person in rotation
 - `!add_historical_pick <username> "<title>" [year] ["date"]` - Add historical movie pick
 - `!admin_stats` - Show administrative statistics
 

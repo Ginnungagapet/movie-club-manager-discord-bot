@@ -82,37 +82,234 @@ class RotationService:
         finally:
             session.close()
 
-    async def get_current_picker(self) -> Tuple[User, datetime, datetime]:
-        """Get current picker information"""
+    async def skip_next_picker(
+        self, skipped_by: str, reason: str = None
+    ) -> tuple[bool, str, dict]:
+        """
+        Skip the next picker in the rotation
+
+        Args:
+            skipped_by: Discord username of person initiating skip
+            reason: Optional reason for the skip
+
+        Returns:
+            Tuple of (success, message, details_dict)
+        """
         session = self.db.get_session()
         try:
+            from models.database import RotationSkip
+
+            # Get the current next picker (who we're skipping)
+            current_user, current_start, current_end = await self.get_current_picker()
+            users = session.query(User).order_by(User.rotation_position).all()
+
+            if not users:
+                return False, "No users in rotation", {}
+
+            # Calculate who would normally be next (without considering existing skips)
+            next_position = (current_user.rotation_position + 1) % len(users)
+            user_to_skip = next(
+                u for u in users if u.rotation_position == next_position
+            )
+
+            # Calculate the period dates for the user being skipped
+            skip_start = current_end
+            skip_end = skip_start + timedelta(days=14)
+
+            # Check if this period is already skipped
+            existing_skip = (
+                session.query(RotationSkip)
+                .filter(
+                    RotationSkip.skipped_user_id == user_to_skip.id,
+                    RotationSkip.original_start_date == skip_start.date(),
+                    RotationSkip.original_end_date == skip_end.date(),
+                )
+                .first()
+            )
+
+            if existing_skip:
+                return (
+                    False,
+                    f"{user_to_skip.real_name}'s next period is already skipped",
+                    {},
+                )
+
+            # Check if the user has already picked for their upcoming period
+            existing_pick = (
+                session.query(MoviePick)
+                .filter(
+                    MoviePick.picker_user_id == user_to_skip.id,
+                    MoviePick.period_start_date == skip_start.date(),
+                    MoviePick.period_end_date == skip_end.date(),
+                )
+                .first()
+            )
+
+            if existing_pick:
+                return (
+                    False,
+                    f"Cannot skip {user_to_skip.real_name} - they've already picked a movie for their upcoming period",
+                    {},
+                )
+
+            # Create the skip record
+            skip_record = RotationSkip(
+                skipped_user_id=user_to_skip.id,
+                original_start_date=skip_start.date(),
+                original_end_date=skip_end.date(),
+                skip_reason=reason,
+                skipped_by=skipped_by,
+            )
+
+            session.add(skip_record)
+            session.commit()
+
+            # Get the new next picker (after the skip)
+            new_next_user, new_next_start, new_next_end = await self.get_next_picker()
+
+            details = {
+                "skipped_user": user_to_skip.real_name,
+                "skipped_period": f"{skip_start.strftime('%b %d')} - {skip_end.strftime('%b %d')}",
+                "new_next_user": new_next_user.real_name,
+                "new_next_period": f"{new_next_start.strftime('%b %d')} - {new_next_end.strftime('%b %d')}",
+            }
+
+            message = (
+                f"✅ Skipped {user_to_skip.real_name}'s upcoming period.\n"
+                f"Next picker is now {new_next_user.real_name}"
+            )
+
+            logger.info(
+                f"Skipped {user_to_skip.real_name}'s period ({skip_start} to {skip_end})"
+            )
+            return True, message, details
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error skipping next picker: {e}")
+            return False, f"Error skipping next picker: {str(e)}", {}
+        finally:
+            session.close()
+
+    async def get_skips_for_period(
+        self, start_date: datetime, end_date: datetime
+    ) -> list:
+        """Get all skips that affect periods before the given date range"""
+        session = self.db.get_session()
+        try:
+            from models.database import RotationSkip
+
+            skips = (
+                session.query(RotationSkip)
+                .filter(RotationSkip.original_start_date <= end_date.date())
+                .all()
+            )
+
+            return skips
+        finally:
+            session.close()
+
+    async def count_skips_before_position(
+        self, position: int, periods_elapsed: int
+    ) -> int:
+        """Count how many skips have occurred that affect the rotation up to this point"""
+        session = self.db.get_session()
+        try:
+            from models.database import RotationSkip
+
+            rotation_state = session.query(RotationState).first()
+            if not rotation_state or not rotation_state.rotation_start_date:
+                return 0
+
+            start_date = rotation_state.rotation_start_date
+            users = session.query(User).order_by(User.rotation_position).all()
+
+            if not users:
+                return 0
+
+            total_skips = 0
+
+            # Check each period up to the current one for skips
+            for period_num in range(periods_elapsed + 1):
+                period_start = start_date + timedelta(days=period_num * 14)
+                period_end = period_start + timedelta(days=14)
+
+                # Check if this period was skipped
+                skip_exists = (
+                    session.query(RotationSkip)
+                    .filter(
+                        RotationSkip.original_start_date == period_start.date(),
+                        RotationSkip.original_end_date == period_end.date(),
+                    )
+                    .first()
+                )
+
+                if skip_exists:
+                    total_skips += 1
+
+            return total_skips
+
+        finally:
+            session.close()
+
+    async def get_current_picker(self) -> Tuple[User, datetime, datetime]:
+        """Get current picker information, accounting for skips"""
+        session = self.db.get_session()
+        try:
+            from models.database import RotationSkip
+
             rotation_state = session.query(RotationState).first()
             if not rotation_state or not rotation_state.rotation_start_date:
                 raise ValueError("No rotation state set up")
 
-            # Calculate current period based on time elapsed
             now = datetime.now()
             start_date = rotation_state.rotation_start_date
             days_since_start = (now - start_date).days
-            periods_passed = days_since_start // 14  # 14-day periods
 
-            # Get all users ordered by rotation position
             users = session.query(User).order_by(User.rotation_position).all()
             if not users:
                 raise ValueError("No users in rotation")
 
-            # Calculate current user position
+            # We need to figure out who the current picker is by checking each period
+            # and accounting for skips
+            current_period_start = start_date
+            position_index = 0
+
+            while current_period_start <= now:
+                current_period_end = current_period_start + timedelta(days=14)
+                current_user = users[position_index % len(users)]
+
+                # Check if this period was skipped
+                skip_exists = (
+                    session.query(RotationSkip)
+                    .filter(
+                        RotationSkip.skipped_user_id == current_user.id,
+                        RotationSkip.original_start_date == current_period_start.date(),
+                        RotationSkip.original_end_date == current_period_end.date(),
+                    )
+                    .first()
+                )
+
+                if not skip_exists and current_period_start <= now < current_period_end:
+                    # This is our current period
+                    if rotation_state.current_user_id != current_user.id:
+                        rotation_state.current_user_id = current_user.id
+                        session.commit()
+
+                    return current_user, current_period_start, current_period_end
+
+                # Move to next period
+                if not skip_exists:
+                    # Only advance the position if this period wasn't skipped
+                    current_period_start = current_period_end
+                position_index += 1
+
+            # Shouldn't reach here, but fallback to calculated position
+            periods_passed = days_since_start // 14
             current_position = periods_passed % len(users)
             current_user = users[current_position]
-
-            # Calculate period dates
             current_period_start = start_date + timedelta(days=periods_passed * 14)
             current_period_end = current_period_start + timedelta(days=14)
-
-            # Update rotation state if needed
-            if rotation_state.current_user_id != current_user.id:
-                rotation_state.current_user_id = current_user.id
-                session.commit()
 
             return current_user, current_period_start, current_period_end
 
@@ -120,26 +317,48 @@ class RotationService:
             session.close()
 
     async def get_next_picker(self) -> Tuple[User, datetime, datetime]:
-        """Get next picker information"""
+        """Get next picker information, accounting for skips"""
         session = self.db.get_session()
         try:
+            from models.database import RotationSkip
+
             current_user, _, current_end = await self.get_current_picker()
             users = session.query(User).order_by(User.rotation_position).all()
 
             if not users:
                 raise ValueError("No users in rotation")
 
-            # Find next user
-            current_position = current_user.rotation_position
-            next_position = (current_position + 1) % len(users)
-            next_user = next(
-                user for user in users if user.rotation_position == next_position
-            )
+            # Start checking from the next position after current
+            check_position = (current_user.rotation_position + 1) % len(users)
+            check_start = current_end
 
-            period_start = current_end
-            period_end = period_start + timedelta(days=14)
+            # Keep checking until we find a non-skipped period
+            attempts = 0  # Prevent infinite loop
+            while attempts < len(users) * 2:
+                check_end = check_start + timedelta(days=14)
+                check_user = users[check_position % len(users)]
 
-            return next_user, period_start, period_end
+                # Check if this period is skipped
+                skip_exists = (
+                    session.query(RotationSkip)
+                    .filter(
+                        RotationSkip.skipped_user_id == check_user.id,
+                        RotationSkip.original_start_date == check_start.date(),
+                        RotationSkip.original_end_date == check_end.date(),
+                    )
+                    .first()
+                )
+
+                if not skip_exists:
+                    # Found the next non-skipped period
+                    return check_user, check_start, check_end
+
+                # This period is skipped, move to next
+                check_position = (check_position + 1) % len(users)
+                attempts += 1
+
+            # Fallback (shouldn't happen)
+            raise ValueError("Unable to find next picker after checking all positions")
 
         finally:
             session.close()
@@ -316,34 +535,17 @@ class RotationService:
         finally:
             session.close()
 
-    async def advance_rotation(self) -> bool:
-        """Manually advance rotation to next person"""
-        session = self.db.get_session()
-        try:
-            next_user, _, _ = await self.get_next_picker()
-
-            rotation_state = session.query(RotationState).first()
-            if rotation_state:
-                rotation_state.current_user_id = next_user.id
-                session.commit()
-                logger.info(f"Advanced rotation to {next_user.real_name}")
-                return True
-
-            return False
-
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Error advancing rotation: {e}")
-            return False
-        finally:
-            session.close()
-
     async def get_schedule(
         self, periods: int = 5
-    ) -> List[Tuple[User, datetime, datetime, bool]]:
-        """Get upcoming schedule"""
+    ) -> List[Tuple[User, datetime, datetime, bool, bool]]:
+        """
+        Get upcoming schedule with skip information
+        Returns: List of (user, start, end, is_current, is_skipped)
+        """
         session = self.db.get_session()
         try:
+            from models.database import RotationSkip
+
             users = session.query(User).order_by(User.rotation_position).all()
             if not users:
                 return []
@@ -351,20 +553,40 @@ class RotationService:
             current_user, current_start, current_end = await self.get_current_picker()
             schedule = []
 
-            for i in range(periods):
-                position = (current_user.rotation_position + i) % len(users)
-                user = next(u for u in users if u.rotation_position == position)
+            # Add current period (never skipped by definition)
+            schedule.append((current_user, current_start, current_end, True, False))
 
-                if i == 0:
-                    period_start = current_start
-                    period_end = current_end
-                    is_current = True
-                else:
-                    period_start = current_end + timedelta(days=14 * (i - 1))
-                    period_end = period_start + timedelta(days=14)
-                    is_current = False
+            # Calculate future periods
+            check_position = (current_user.rotation_position + 1) % len(users)
+            check_start = current_end
+            periods_added = 1
 
-                schedule.append((user, period_start, period_end, is_current))
+            while periods_added < periods:
+                check_end = check_start + timedelta(days=14)
+                check_user = users[check_position % len(users)]
+
+                # Check if this period is skipped
+                skip_exists = (
+                    session.query(RotationSkip)
+                    .filter(
+                        RotationSkip.skipped_user_id == check_user.id,
+                        RotationSkip.original_start_date == check_start.date(),
+                        RotationSkip.original_end_date == check_end.date(),
+                    )
+                    .first()
+                )
+
+                is_skipped = skip_exists is not None
+
+                schedule.append((check_user, check_start, check_end, False, is_skipped))
+
+                check_position = (check_position + 1) % len(users)
+                periods_added += 1
+
+                # Don't advance the date if this period was skipped
+                # (the next person takes this slot)
+                if not is_skipped:
+                    check_start = check_end
 
             return schedule
 
@@ -372,7 +594,7 @@ class RotationService:
             session.close()
 
     async def create_schedule_embed(self, periods: int = 5) -> discord.Embed:
-        """Create Discord embed showing rotation schedule with pick status"""
+        """Create Discord embed showing rotation schedule with pick status and skips"""
         schedule = await self.get_schedule(periods)
 
         embed = discord.Embed(
@@ -381,40 +603,56 @@ class RotationService:
             color=0x00FF00,
         )
 
-        for i, (user, start, end, is_current) in enumerate(schedule):
-            status = "🎯 **CURRENT**" if is_current else f"#{i + 1}"
+        display_position = 0
+        for i, (user, start, end, is_current, is_skipped) in enumerate(schedule):
+            if is_skipped:
+                # Show skipped periods differently
+                status = "⏭️ **SKIPPED**"
+                period_str = (
+                    f"~~{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}~~"
+                )
 
-            # Check if user has picked for their period
-            picks = await self.get_picks_for_period(start, end)
-            user_pick = next((p for p in picks if p.picker_user_id == user.id), None)
+                embed.add_field(
+                    name=f"{status} {user.real_name}",
+                    value=f"📅 {period_str}\n*Period skipped*",
+                    inline=False,
+                )
+            else:
+                status = "🎯 **CURRENT**" if is_current else f"#{display_position + 1}"
 
-            if user_pick:
-                status += " ✅"
+                # Check if user has picked for their period
+                picks = await self.get_picks_for_period(start, end)
+                user_pick = next(
+                    (p for p in picks if p.picker_user_id == user.id), None
+                )
 
-            # Check if next person is in early access
-            if i == 1:
-                can_pick, reason = await self.can_user_pick(user.discord_username)
-                if "Early access" in reason:
-                    if user_pick:
-                        status += " 🚪✅ *Early Access - Already Picked*"
-                    else:
-                        status += " 🚪 *Early Access Open*"
+                if user_pick:
+                    status += " ✅"
 
-            period_str = f"{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
+                # Check if next person is in early access
+                if display_position == 1:  # Next non-skipped picker
+                    can_pick, reason = await self.can_user_pick(user.discord_username)
+                    if "Early access" in reason:
+                        if user_pick:
+                            status += " 🚪✅ *Early Access - Already Picked*"
+                        else:
+                            status += " 🚪 *Early Access Open*"
 
-            # Build the value string
-            value_str = f"📅 {period_str}"
-            if user_pick:
-                movie_title = user_pick.movie_title
-                if user_pick.movie_year:
-                    movie_title += f" ({user_pick.movie_year})"
-                value_str += f"\n🎬 {movie_title}"
+                period_str = f"{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
 
-            embed.add_field(
-                name=f"{status} {user.real_name}",
-                value=value_str,
-                inline=False,
-            )
+                # Build the value string
+                value_str = f"📅 {period_str}"
+                if user_pick:
+                    movie_title = user_pick.movie_title
+                    if user_pick.movie_year:
+                        movie_title += f" ({user_pick.movie_year})"
+                    value_str += f"\n🎬 {movie_title}"
+
+                embed.add_field(
+                    name=f"{status} {user.real_name}", value=value_str, inline=False
+                )
+
+                display_position += 1
 
         return embed
 

@@ -179,26 +179,6 @@ class TestRotationService:
         assert all(pick.picker.discord_username == "paul" for pick in paul_picks)
 
     @pytest.mark.asyncio
-    async def test_advance_rotation(self, rotation_service, sample_users):
-        """Test manually advancing rotation"""
-        await rotation_service.setup_rotation(sample_users)
-
-        start_date = datetime(2025, 5, 5)
-        await rotation_service.update_rotation_start_date(start_date)
-
-        # Get current picker
-        current_user_before, _, _ = await rotation_service.get_current_picker()
-        assert current_user_before.discord_username == "paul"
-
-        # Advance rotation
-        success = await rotation_service.advance_rotation()
-        assert success == True
-
-        # Check new current picker
-        current_user_after, _, _ = await rotation_service.get_current_picker()
-        assert current_user_after.discord_username == "derek"
-
-    @pytest.mark.asyncio
     async def test_invalid_user_pick_permission(self, rotation_service, sample_users):
         """Test permission checking for invalid user"""
         await rotation_service.setup_rotation(sample_users)

@@ -62,13 +62,241 @@ class AdminCommands(commands.Cog):
             logger.error(f"Error setting up rotation: {e}")
             await ctx.send(f"❌ Error setting up rotation: {str(e)}")
 
-    @commands.command(name="advance_rotation")
+    @commands.command(name="skip_pick")
     @commands.has_permissions(administrator=True)
-    async def advance_rotation(self, ctx):
-        """Manually advance to the next person in rotation (Admin only)"""
-        await ctx.send(
-            "❌ Manual rotation advancement is no longer supported. The rotation advances automatically based on time."
-        )
+    async def skip_next_pick(self, ctx, *, reason: str = None):
+        """
+        Skip the next picker in the rotation (Admin only)
+        The person after them will become the next picker instead.
+
+        Usage: !skip_pick
+            !skip_pick [reason]
+
+        Example: !skip_pick Derek is out of town
+        """
+        try:
+            # Get current situation before skip
+            current_user, current_start, current_end = (
+                await self.rotation_service.get_current_picker()
+            )
+
+            # Get who would normally be next (before skip)
+            next_user, next_start, next_end = (
+                await self.rotation_service.get_next_picker()
+            )
+
+            # Confirm the skip action
+            confirm_embed = discord.Embed(
+                title="⚠️ Confirm Skip",
+                description=(
+                    f"This will skip **{next_user.real_name}**'s upcoming period "
+                    f"({next_start.strftime('%b %d')} - {next_end.strftime('%b %d')})"
+                ),
+                color=0xFF6600,
+            )
+
+            # Check if they've already picked
+            user_pick = await self.rotation_service.get_user_active_pick(
+                next_user.discord_username
+            )
+            if user_pick:
+                movie_title = user_pick.movie_title
+                if user_pick.movie_year:
+                    movie_title += f" ({user_pick.movie_year})"
+                confirm_embed.add_field(
+                    name="⚠️ Warning",
+                    value=f"{next_user.real_name} has already picked: **{movie_title}**\nThis movie selection will be lost!",
+                    inline=False,
+                )
+
+            confirm_embed.add_field(
+                name="Type to confirm",
+                value="Type `CONFIRM SKIP` within 30 seconds to proceed",
+                inline=False,
+            )
+
+            if reason:
+                confirm_embed.add_field(name="Reason", value=reason, inline=False)
+
+            confirmation_msg = await ctx.send(embed=confirm_embed)
+
+            def check(m):
+                return (
+                    m.author == ctx.author
+                    and m.channel == ctx.channel
+                    and m.content == "CONFIRM SKIP"
+                )
+
+            try:
+                await self.bot.wait_for("message", check=check, timeout=30.0)
+            except:
+                await confirmation_msg.edit(
+                    content="❌ Skip cancelled (timed out)", embed=None
+                )
+                return
+
+            # Perform the skip
+            success, message, details = await self.rotation_service.skip_next_picker(
+                skipped_by=ctx.author.name, reason=reason
+            )
+
+            if success:
+                # Create success embed
+                result_embed = discord.Embed(
+                    title="✅ Picker Skipped", description=message, color=0x00FF00
+                )
+
+                result_embed.add_field(
+                    name="Skipped",
+                    value=f"{details['skipped_user']}\n{details['skipped_period']}",
+                    inline=True,
+                )
+
+                result_embed.add_field(
+                    name="New Next Picker",
+                    value=f"{details['new_next_user']}\n{details['new_next_period']}",
+                    inline=True,
+                )
+
+                if reason:
+                    result_embed.add_field(name="Reason", value=reason, inline=False)
+
+                # Show updated schedule
+                result_embed.add_field(
+                    name="View Updated Schedule",
+                    value="Use `!schedule` to see the updated rotation",
+                    inline=False,
+                )
+
+                await ctx.send(embed=result_embed)
+
+                # Log the skip
+                logger.info(
+                    f"{ctx.author.name} skipped {details['skipped_user']}'s period{f' (reason: {reason})' if reason else ''}"
+                )
+
+            else:
+                error_embed = discord.Embed(
+                    title="❌ Skip Failed", description=message, color=0xFF0000
+                )
+                await ctx.send(embed=error_embed)
+
+        except Exception as e:
+            logger.error(f"Error in skip_pick command: {e}")
+            await ctx.send(f"❌ Error processing skip: {str(e)}")
+
+    @commands.command(name="list_skips")
+    @commands.has_permissions(administrator=True)
+    async def list_skips(self, ctx):
+        """
+        List all skipped periods (Admin only)
+        """
+        session = self.rotation_service.db.get_session()
+        try:
+            from models.database import RotationSkip
+
+            skips = (
+                session.query(RotationSkip)
+                .order_by(RotationSkip.original_start_date.desc())
+                .all()
+            )
+
+            if not skips:
+                await ctx.send("No skipped periods in the rotation history.")
+                return
+
+            embed = discord.Embed(
+                title="⏭️ Skipped Periods",
+                description=f"Total skips: {len(skips)}",
+                color=0xFF6600,
+            )
+
+            for skip in skips[:10]:  # Show last 10 skips
+                skip_info = (
+                    f"Period: {skip.original_start_date.strftime('%b %d')} - "
+                    f"{skip.original_end_date.strftime('%b %d, %Y')}\n"
+                    f"Skipped by: {skip.skipped_by}\n"
+                    f"When: {skip.skipped_at.strftime('%b %d, %Y')}"
+                )
+
+                if skip.skip_reason:
+                    skip_info += f"\nReason: {skip.skip_reason}"
+
+                embed.add_field(
+                    name=f"{skip.skipped_user.real_name}", value=skip_info, inline=False
+                )
+
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error listing skips: {e}")
+            await ctx.send(f"❌ Error listing skips: {str(e)}")
+        finally:
+            session.close()
+
+    @commands.command(name="undo_skip")
+    @commands.has_permissions(administrator=True)
+    async def undo_skip(self, ctx, username: str):
+        """
+        Undo a skip for a specific user's next skipped period (Admin only)
+        Usage: !undo_skip derek
+        """
+        session = self.rotation_service.db.get_session()
+        try:
+            from models.database import User, RotationSkip
+
+            # Find the user
+            user = session.query(User).filter(User.discord_username == username).first()
+            if not user:
+                await ctx.send(f"❌ User @{username} not found")
+                return
+
+            # Find the most recent future skip for this user
+            now = datetime.now()
+            skip = (
+                session.query(RotationSkip)
+                .filter(
+                    RotationSkip.skipped_user_id == user.id,
+                    RotationSkip.original_end_date >= now.date(),
+                )
+                .order_by(RotationSkip.original_start_date)
+                .first()
+            )
+
+            if not skip:
+                await ctx.send(
+                    f"❌ No upcoming skipped periods found for {user.real_name}"
+                )
+                return
+
+            # Remove the skip
+            period_str = f"{skip.original_start_date.strftime('%b %d')} - {skip.original_end_date.strftime('%b %d')}"
+            session.delete(skip)
+            session.commit()
+
+            embed = discord.Embed(
+                title="✅ Skip Removed",
+                description=f"Restored {user.real_name}'s period: {period_str}",
+                color=0x00FF00,
+            )
+
+            embed.add_field(
+                name="Note",
+                value="The schedule has been updated. Use `!schedule` to view changes.",
+                inline=False,
+            )
+
+            await ctx.send(embed=embed)
+            logger.info(
+                f"{ctx.author.name} removed skip for {user.real_name}'s period {period_str}"
+            )
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error undoing skip: {e}")
+            await ctx.send(f"❌ Error undoing skip: {str(e)}")
+        finally:
+            session.close()
 
     @commands.command(name="add_historical_pick")
     @commands.has_permissions(administrator=True)
