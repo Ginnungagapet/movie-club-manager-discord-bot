@@ -86,10 +86,11 @@ class RotationService:
         self, skipped_by: str, who: str, reason: str = None
     ) -> tuple[bool, str, dict]:
         """
-        Skip the next picker in the rotation
+        Skip the current or next picker in the rotation
 
         Args:
             skipped_by: Discord username of person initiating skip
+            who: "current" or "next" - which picker to skip
             reason: Optional reason for the skip
 
         Returns:
@@ -99,29 +100,31 @@ class RotationService:
         try:
             from models.database import RotationSkip
 
-            # Get the current next picker (who we're skipping)
+            # Get current and next pickers
             current_user, current_start, current_end = await self.get_current_picker()
             users = session.query(User).order_by(User.rotation_position).all()
 
             if not users:
                 return False, "No users in rotation", {}
 
-            # Calculate who would normally be next (without considering existing skips)
-            next_position = (current_user.rotation_position + 1) % len(users)
-
-            user_to_skip = None
             if who == "current":
-                user_to_skip == current_user
-            elif who == "next":
-                user_to_skip = next(
-                    u for u in users if u.rotation_position == next_position
-                )
-            else:
-                return False, "Must specify next or current user", {}
+                # Skip the current picker
+                user_to_skip = current_user
+                skip_start = current_start
+                skip_end = current_end
 
-            # Calculate the period dates for the user being skipped
-            skip_start = current_end
-            skip_end = skip_start + timedelta(days=14)
+                # The next picker will become the new current picker immediately
+                next_user, _, _ = await self.get_next_picker()
+
+            elif who == "next":
+                # Skip the next picker
+                next_user, next_start, next_end = await self.get_next_picker()
+                user_to_skip = next_user
+                skip_start = next_start
+                skip_end = next_end
+
+            else:
+                return False, "Must specify 'current' or 'next' for who parameter", {}
 
             # Check if this period is already skipped
             existing_skip = (
@@ -137,11 +140,11 @@ class RotationService:
             if existing_skip:
                 return (
                     False,
-                    f"{user_to_skip.real_name}'s next period is already skipped",
+                    f"{user_to_skip.real_name}'s period is already skipped",
                     {},
                 )
 
-            # Check if the user has already picked for their upcoming period
+            # Check if the user has already picked for the period being skipped
             existing_pick = (
                 session.query(MoviePick)
                 .filter(
@@ -153,11 +156,13 @@ class RotationService:
             )
 
             if existing_pick:
-                return (
-                    False,
-                    f"Cannot skip {user_to_skip.real_name} - they've already picked a movie for their upcoming period",
-                    {},
-                )
+                movie_title = existing_pick.movie_title
+                if existing_pick.movie_year:
+                    movie_title += f" ({existing_pick.movie_year})"
+
+                # Delete the pick since we're skipping this period
+                session.delete(existing_pick)
+                logger.info(f"Deleted movie pick '{movie_title}' due to skip")
 
             # Create the skip record
             skip_record = RotationSkip(
@@ -171,20 +176,42 @@ class RotationService:
             session.add(skip_record)
             session.commit()
 
-            # Get the new next picker (after the skip)
-            new_next_user, new_next_start, new_next_end = await self.get_next_picker()
+            # Get the new current/next picker after the skip
+            if who == "current":
+                # After skipping current, get the new current picker
+                new_current_user, new_current_start, new_current_end = (
+                    await self.get_current_picker()
+                )
 
-            details = {
-                "skipped_user": user_to_skip.real_name,
-                "skipped_period": f"{skip_start.strftime('%b %d')} - {skip_end.strftime('%b %d')}",
-                "new_next_user": new_next_user.real_name,
-                "new_next_period": f"{new_next_start.strftime('%b %d')} - {new_next_end.strftime('%b %d')}",
-            }
+                details = {
+                    "skipped_user": user_to_skip.real_name,
+                    "skipped_period": f"{skip_start.strftime('%b %d')} - {skip_end.strftime('%b %d')}",
+                    "new_current_user": new_current_user.real_name,
+                    "new_current_period": f"{new_current_start.strftime('%b %d')} - {new_current_end.strftime('%b %d')}",
+                }
 
-            message = (
-                f"✅ Skipped {user_to_skip.real_name}'s upcoming period.\n"
-                f"Next picker is now {new_next_user.real_name}"
-            )
+                message = (
+                    f"✅ Skipped {user_to_skip.real_name}'s current period.\n"
+                    f"Current picker is now {new_current_user.real_name}"
+                )
+
+            else:  # who == "next"
+                # After skipping next, get the new next picker
+                new_next_user, new_next_start, new_next_end = (
+                    await self.get_next_picker()
+                )
+
+                details = {
+                    "skipped_user": user_to_skip.real_name,
+                    "skipped_period": f"{skip_start.strftime('%b %d')} - {skip_end.strftime('%b %d')}",
+                    "new_next_user": new_next_user.real_name,
+                    "new_next_period": f"{new_next_start.strftime('%b %d')} - {new_next_end.strftime('%b %d')}",
+                }
+
+                message = (
+                    f"✅ Skipped {user_to_skip.real_name}'s upcoming period.\n"
+                    f"Next picker is now {new_next_user.real_name}"
+                )
 
             logger.info(
                 f"Skipped {user_to_skip.real_name}'s period ({skip_start} to {skip_end})"
@@ -193,8 +220,8 @@ class RotationService:
 
         except Exception as e:
             session.rollback()
-            logger.error(f"Error skipping next picker: {e}")
-            return False, f"Error skipping next picker: {str(e)}", {}
+            logger.error(f"Error skipping picker: {e}")
+            return False, f"Error skipping picker: {str(e)}", {}
         finally:
             session.close()
 

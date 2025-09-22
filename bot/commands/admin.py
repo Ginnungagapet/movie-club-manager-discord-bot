@@ -67,12 +67,12 @@ class AdminCommands(commands.Cog):
     async def skip_current_pick(self, ctx, *, reason: str = None):
         """
         Skip the current picker in the rotation (Admin only)
-        The next person will become the current picker instead.
+        The next person will become the current picker immediately.
 
-        Usage: !skip_pick
-            !skip_pick [reason]
+        Usage: !skip_current_pick
+            !skip_current_pick [reason]
 
-        Example: !skip_pick Derek is out of town
+        Example: !skip_current_pick Paul is sick
         """
         try:
             # Get current situation before skip
@@ -80,17 +80,18 @@ class AdminCommands(commands.Cog):
                 await self.rotation_service.get_current_picker()
             )
 
-            # Get who would normally be next (before skip)
+            # Get who will become the new current picker
             next_user, next_start, next_end = (
                 await self.rotation_service.get_next_picker()
             )
 
             # Confirm the skip action
             confirm_embed = discord.Embed(
-                title="⚠️ Confirm Skip",
+                title="⚠️ Confirm Skip Current Picker",
                 description=(
-                    f"This will skip **{current_user.real_name}**'s period "
-                    f"({current_start.strftime('%b %d')} - {current_end.strftime('%b %d')})"
+                    f"This will skip **{current_user.real_name}**'s CURRENT period "
+                    f"({current_start.strftime('%b %d')} - {current_end.strftime('%b %d')})\n\n"
+                    f"**{next_user.real_name}** will become the current picker immediately."
                 ),
                 color=0xFF6600,
             )
@@ -105,7 +106,7 @@ class AdminCommands(commands.Cog):
                     movie_title += f" ({user_pick.movie_year})"
                 confirm_embed.add_field(
                     name="⚠️ Warning",
-                    value=f"{current_user.real_name} has already picked: **{movie_title}**\nThis movie selection will be lost!",
+                    value=f"{current_user.real_name} has already picked: **{movie_title}**\nThis movie selection will be deleted!",
                     inline=False,
                 )
 
@@ -143,7 +144,9 @@ class AdminCommands(commands.Cog):
             if success:
                 # Create success embed
                 result_embed = discord.Embed(
-                    title="✅ Picker Skipped", description=message, color=0x00FF00
+                    title="✅ Current Picker Skipped",
+                    description=message,
+                    color=0x00FF00,
                 )
 
                 result_embed.add_field(
@@ -152,11 +155,13 @@ class AdminCommands(commands.Cog):
                     inline=True,
                 )
 
-                result_embed.add_field(
-                    name="New Next Picker",
-                    value=f"{details['new_next_user']}\n{details['new_next_period']}",
-                    inline=True,
-                )
+                # For current skip, show new current picker
+                if "new_current_user" in details:
+                    result_embed.add_field(
+                        name="New Current Picker",
+                        value=f"{details['new_current_user']}\n{details.get('new_current_period', '')}",
+                        inline=True,
+                    )
 
                 if reason:
                     result_embed.add_field(name="Reason", value=reason, inline=False)
@@ -172,7 +177,7 @@ class AdminCommands(commands.Cog):
 
                 # Log the skip
                 logger.info(
-                    f"{ctx.author.name} skipped {details['skipped_user']}'s period{f' (reason: {reason})' if reason else ''}"
+                    f"{ctx.author.name} skipped {details['skipped_user']}'s current period{f' (reason: {reason})' if reason else ''}"
                 )
 
             else:
@@ -182,7 +187,7 @@ class AdminCommands(commands.Cog):
                 await ctx.send(embed=error_embed)
 
         except Exception as e:
-            logger.error(f"Error in skip_pick command: {e}")
+            logger.error(f"Error in skip_current_pick command: {e}")
             await ctx.send(f"❌ Error processing skip: {str(e)}")
 
     @commands.command(name="skip_next_pick")
@@ -192,13 +197,13 @@ class AdminCommands(commands.Cog):
         Skip the next picker in the rotation (Admin only)
         The person after them will become the next picker instead.
 
-        Usage: !skip_pick
-            !skip_pick [reason]
+        Usage: !skip_next_pick
+            !skip_next_pick [reason]
 
-        Example: !skip_pick Derek is out of town
+        Example: !skip_next_pick Derek is out of town
         """
         try:
-            # Get current situation before skip
+            # Get current situation
             current_user, current_start, current_end = (
                 await self.rotation_service.get_current_picker()
             )
@@ -210,10 +215,11 @@ class AdminCommands(commands.Cog):
 
             # Confirm the skip action
             confirm_embed = discord.Embed(
-                title="⚠️ Confirm Skip",
+                title="⚠️ Confirm Skip Next Picker",
                 description=(
                     f"This will skip **{next_user.real_name}**'s upcoming period "
-                    f"({next_start.strftime('%b %d')} - {next_end.strftime('%b %d')})"
+                    f"({next_start.strftime('%b %d')} - {next_end.strftime('%b %d')})\n\n"
+                    f"The person after them will become the next picker."
                 ),
                 color=0xFF6600,
             )
@@ -228,7 +234,7 @@ class AdminCommands(commands.Cog):
                     movie_title += f" ({user_pick.movie_year})"
                 confirm_embed.add_field(
                     name="⚠️ Warning",
-                    value=f"{next_user.real_name} has already picked: **{movie_title}**\nThis movie selection will be lost!",
+                    value=f"{next_user.real_name} has already picked: **{movie_title}**\nThis movie selection will be deleted!",
                     inline=False,
                 )
 
@@ -266,7 +272,7 @@ class AdminCommands(commands.Cog):
             if success:
                 # Create success embed
                 result_embed = discord.Embed(
-                    title="✅ Picker Skipped", description=message, color=0x00FF00
+                    title="✅ Next Picker Skipped", description=message, color=0x00FF00
                 )
 
                 result_embed.add_field(
@@ -295,7 +301,7 @@ class AdminCommands(commands.Cog):
 
                 # Log the skip
                 logger.info(
-                    f"{ctx.author.name} skipped {details['skipped_user']}'s period{f' (reason: {reason})' if reason else ''}"
+                    f"{ctx.author.name} skipped {details['skipped_user']}'s upcoming period{f' (reason: {reason})' if reason else ''}"
                 )
 
             else:
@@ -305,7 +311,7 @@ class AdminCommands(commands.Cog):
                 await ctx.send(embed=error_embed)
 
         except Exception as e:
-            logger.error(f"Error in skip_pick command: {e}")
+            logger.error(f"Error in skip_next_pick command: {e}")
             await ctx.send(f"❌ Error processing skip: {str(e)}")
 
     @commands.command(name="list_skips")
