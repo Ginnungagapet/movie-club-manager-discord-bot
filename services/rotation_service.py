@@ -82,8 +82,8 @@ class RotationService:
         finally:
             session.close()
 
-    async def skip_next_picker(
-        self, skipped_by: str, reason: str = None
+    async def skip_picker(
+        self, skipped_by: str, who: str, reason: str = None
     ) -> tuple[bool, str, dict]:
         """
         Skip the next picker in the rotation
@@ -108,9 +108,16 @@ class RotationService:
 
             # Calculate who would normally be next (without considering existing skips)
             next_position = (current_user.rotation_position + 1) % len(users)
-            user_to_skip = next(
-                u for u in users if u.rotation_position == next_position
-            )
+
+            user_to_skip = None
+            if who == "current":
+                user_to_skip == current_user
+            elif who == "next":
+                user_to_skip = next(
+                    u for u in users if u.rotation_position == next_position
+                )
+            else:
+                return False, "Must specify next or current user", {}
 
             # Calculate the period dates for the user being skipped
             skip_start = current_end

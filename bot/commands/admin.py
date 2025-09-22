@@ -62,7 +62,130 @@ class AdminCommands(commands.Cog):
             logger.error(f"Error setting up rotation: {e}")
             await ctx.send(f"❌ Error setting up rotation: {str(e)}")
 
-    @commands.command(name="skip_pick")
+    @commands.command(name="skip_current_pick")
+    @commands.has_permissions(administrator=True)
+    async def skip_next_pick(self, ctx, *, reason: str = None):
+        """
+        Skip the current picker in the rotation (Admin only)
+        The next person will become the current picker instead.
+
+        Usage: !skip_pick
+            !skip_pick [reason]
+
+        Example: !skip_pick Derek is out of town
+        """
+        try:
+            # Get current situation before skip
+            current_user, current_start, current_end = (
+                await self.rotation_service.get_current_picker()
+            )
+
+            # Get who would normally be next (before skip)
+            next_user, next_start, next_end = (
+                await self.rotation_service.get_next_picker()
+            )
+
+            # Confirm the skip action
+            confirm_embed = discord.Embed(
+                title="⚠️ Confirm Skip",
+                description=(
+                    f"This will skip **{current_user.real_name}**'s period "
+                    f"({current_start.strftime('%b %d')} - {current_end.strftime('%b %d')})"
+                ),
+                color=0xFF6600,
+            )
+
+            # Check if they've already picked
+            user_pick = await self.rotation_service.get_user_active_pick(
+                current_user.discord_username
+            )
+            if user_pick:
+                movie_title = user_pick.movie_title
+                if user_pick.movie_year:
+                    movie_title += f" ({user_pick.movie_year})"
+                confirm_embed.add_field(
+                    name="⚠️ Warning",
+                    value=f"{current_user.real_name} has already picked: **{movie_title}**\nThis movie selection will be lost!",
+                    inline=False,
+                )
+
+            confirm_embed.add_field(
+                name="Type to confirm",
+                value="Type `CONFIRM SKIP` within 30 seconds to proceed",
+                inline=False,
+            )
+
+            if reason:
+                confirm_embed.add_field(name="Reason", value=reason, inline=False)
+
+            confirmation_msg = await ctx.send(embed=confirm_embed)
+
+            def check(m):
+                return (
+                    m.author == ctx.author
+                    and m.channel == ctx.channel
+                    and m.content == "CONFIRM SKIP"
+                )
+
+            try:
+                await self.bot.wait_for("message", check=check, timeout=30.0)
+            except:
+                await confirmation_msg.edit(
+                    content="❌ Skip cancelled (timed out)", embed=None
+                )
+                return
+
+            # Perform the skip
+            success, message, details = await self.rotation_service.skip_picker(
+                skipped_by=ctx.author.name, who="current", reason=reason
+            )
+
+            if success:
+                # Create success embed
+                result_embed = discord.Embed(
+                    title="✅ Picker Skipped", description=message, color=0x00FF00
+                )
+
+                result_embed.add_field(
+                    name="Skipped",
+                    value=f"{details['skipped_user']}\n{details['skipped_period']}",
+                    inline=True,
+                )
+
+                result_embed.add_field(
+                    name="New Next Picker",
+                    value=f"{details['new_next_user']}\n{details['new_next_period']}",
+                    inline=True,
+                )
+
+                if reason:
+                    result_embed.add_field(name="Reason", value=reason, inline=False)
+
+                # Show updated schedule
+                result_embed.add_field(
+                    name="View Updated Schedule",
+                    value="Use `!schedule` to see the updated rotation",
+                    inline=False,
+                )
+
+                await ctx.send(embed=result_embed)
+
+                # Log the skip
+                logger.info(
+                    f"{ctx.author.name} skipped {details['skipped_user']}'s period{f' (reason: {reason})' if reason else ''}"
+                )
+
+            else:
+                error_embed = discord.Embed(
+                    title="❌ Skip Failed", description=message, color=0xFF0000
+                )
+                await ctx.send(embed=error_embed)
+
+        except Exception as e:
+            logger.error(f"Error in skip_pick command: {e}")
+            await ctx.send(f"❌ Error processing skip: {str(e)}")
+
+    @commands.command(name="skip_next_pick")
     @commands.has_permissions(administrator=True)
     async def skip_next_pick(self, ctx, *, reason: str = None):
         """
@@ -136,8 +259,8 @@ class AdminCommands(commands.Cog):
                 return
 
             # Perform the skip
-            success, message, details = await self.rotation_service.skip_next_picker(
-                skipped_by=ctx.author.name, reason=reason
+            success, message, details = await self.rotation_service.skip_picker(
+                skipped_by=ctx.author.name, who="next", reason=reason
             )
 
             if success:
