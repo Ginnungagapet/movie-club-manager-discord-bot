@@ -1051,6 +1051,8 @@ class RotationService:
         """
         session = self.db.get_session()
         try:
+            from sqlalchemy import func
+
             # Check if user already exists
             existing_user = (
                 session.query(User)
