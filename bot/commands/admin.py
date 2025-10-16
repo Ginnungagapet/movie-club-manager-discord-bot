@@ -1228,6 +1228,150 @@ class AdminCommands(commands.Cog):
         finally:
             session.close()
 
+    @commands.command(name="fix_rotation_order")
+    @commands.has_permissions(administrator=True)
+    async def fix_rotation_order(self, ctx, *, new_order: str):
+        """
+        Manually fix the rotation order by specifying the correct sequence (Admin only)
+        This preserves all historical data and only updates rotation positions.
+
+        Usage: !fix_rotation_order username1,username2,username3,...
+
+        Example: !fix_rotation_order j,kyle,dennis,paul,derek,greg,gavin,baldo
+        """
+        session = self.rotation_service.db.get_session()
+        try:
+            # Parse the new order
+            usernames = [u.strip().lower() for u in new_order.split(",")]
+
+            if len(usernames) < 2:
+                await ctx.send(
+                    "❌ Please provide at least 2 users in the rotation order"
+                )
+                return
+
+            # Verify all users exist
+            all_users = (
+                session.query(User).filter(User.rotation_position.isnot(None)).all()
+            )
+            existing_usernames = {u.discord_username.lower(): u for u in all_users}
+
+            # Check for missing users
+            for username in usernames:
+                if username not in existing_usernames:
+                    await ctx.send(f"❌ User @{username} not found in active rotation")
+                    return
+
+            # Check if we're missing anyone
+            missing = []
+            for existing_username in existing_usernames:
+                if existing_username not in usernames:
+                    missing.append(existing_username)
+
+            if missing:
+                await ctx.send(
+                    f"⚠️ These active users were not included: {', '.join(missing)}\nContinue anyway? Type `YES` to proceed"
+                )
+
+                def check(m):
+                    return (
+                        m.author == ctx.author
+                        and m.channel == ctx.channel
+                        and m.content == "YES"
+                    )
+
+                try:
+                    await self.bot.wait_for("message", check=check, timeout=30.0)
+                except:
+                    await ctx.send("❌ Operation cancelled")
+                    return
+
+            # Update rotation positions
+            for new_position, username in enumerate(usernames):
+                user = existing_usernames[username]
+                user.rotation_position = new_position
+
+            session.commit()
+
+            # Create confirmation embed
+            embed = discord.Embed(
+                title="✅ Rotation Order Fixed",
+                description=f"Updated rotation positions for {len(usernames)} users",
+                color=0x00FF00,
+            )
+
+            # Show the new order
+            order_text = ""
+            for i, username in enumerate(usernames, 1):
+                user = existing_usernames[username]
+                order_text += f"#{i}. {user.real_name} (@{user.discord_username})\n"
+
+            embed.add_field(
+                name="New Rotation Order",
+                value=order_text[:1024],  # Truncate if too long
+                inline=False,
+            )
+
+            embed.add_field(
+                name="Important",
+                value="Run `!schedule` to verify the rotation looks correct",
+                inline=False,
+            )
+
+            await ctx.send(embed=embed)
+
+            logger.info(f"{ctx.author.name} manually fixed rotation order")
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error fixing rotation order: {e}")
+            await ctx.send(f"❌ Error fixing rotation order: {str(e)}")
+        finally:
+            session.close()
+
+    @commands.command(name="set_rotation_date")
+    @commands.has_permissions(administrator=True)
+    async def set_rotation_date(self, ctx, *, date_str: str):
+        """
+        Manually set the rotation start date (Admin only)
+        This is useful for fixing timing issues.
+
+        Usage: !set_rotation_date October 6, 2025
+            !set_rotation_date 2025-10-06
+        """
+        try:
+            from utils.date_utils import parse_date
+
+            new_date = parse_date(date_str)
+            if not new_date:
+                await ctx.send(
+                    "❌ Invalid date format. Try: 'October 6, 2025' or '2025-10-06'"
+                )
+                return
+
+            # Update the rotation start date
+            await self.rotation_service.update_rotation_start_date(new_date)
+
+            embed = discord.Embed(
+                title="✅ Rotation Start Date Updated",
+                description=f"Rotation now starts on {new_date.strftime('%B %d, %Y')}",
+                color=0x00FF00,
+            )
+
+            embed.add_field(
+                name="Note",
+                value="Run `!schedule` to see the updated schedule",
+                inline=False,
+            )
+
+            await ctx.send(embed=embed)
+
+            logger.info(f"{ctx.author.name} set rotation start date to {new_date}")
+
+        except Exception as e:
+            logger.error(f"Error setting rotation date: {e}")
+            await ctx.send(f"❌ Error setting rotation date: {str(e)}")
+
 
 async def setup(bot):
     """Setup function for loading the cog"""
