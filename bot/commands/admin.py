@@ -1075,6 +1075,9 @@ class AdminCommands(commands.Cog):
         """
         session = self.rotation_service.db.get_session()
         try:
+            # Import models here
+            from models.database import User, MoviePick
+
             users = session.query(User).order_by(User.rotation_position).all()
 
             if not users:
@@ -1143,6 +1146,9 @@ class AdminCommands(commands.Cog):
         """
         session = self.rotation_service.db.get_session()
         try:
+            # Import User model here
+            from models.database import User
+
             # Clean up usernames
             username1 = user1.strip().lstrip("@")
             username2 = user2.strip().lstrip("@")
@@ -1241,6 +1247,9 @@ class AdminCommands(commands.Cog):
         """
         session = self.rotation_service.db.get_session()
         try:
+            # Import User model from database
+            from models.database import User
+
             # Parse the new order
             usernames = [u.strip().lower() for u in new_order.split(",")]
 
