@@ -6,7 +6,7 @@ import asyncio
 from functools import partial
 from typing import Optional, Tuple, Dict, Any
 import logging
-from thefuzz import fuzz
+from fuzzywuzzy import fuzz
 import re
 
 from imdb import IMDb
