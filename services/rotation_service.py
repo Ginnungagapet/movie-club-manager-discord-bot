@@ -1035,3 +1035,393 @@ class RotationService:
 
         finally:
             session.close()
+
+    async def add_user_to_rotation(
+        self, discord_username: str, real_name: str
+    ) -> tuple[bool, str, dict]:
+        """
+        Add a new user to the end of the rotation
+
+        Args:
+            discord_username: Discord username (without @)
+            real_name: Real name of the person
+
+        Returns:
+            Tuple of (success, message, details)
+        """
+        session = self.db.get_session()
+        try:
+            from sqlalchemy import func
+
+            # Check if user already exists
+            existing_user = (
+                session.query(User)
+                .filter(User.discord_username == discord_username)
+                .first()
+            )
+
+            if existing_user:
+                return False, f"User @{discord_username} already exists in rotation", {}
+
+            # Check if real name already exists (to prevent duplicates)
+            existing_name = (
+                session.query(User).filter(User.real_name == real_name).first()
+            )
+
+            if existing_name:
+                return (
+                    False,
+                    f"A user with the name '{real_name}' already exists (@{existing_name.discord_username})",
+                    {},
+                )
+
+            # Get the highest rotation position
+            max_position_result = session.query(
+                func.max(User.rotation_position)
+            ).scalar()
+
+            if max_position_result is None:
+                # No users exist yet
+                new_position = 0
+            else:
+                # Add to the end
+                new_position = max_position_result + 1
+
+            # Create the new user
+            new_user = User(
+                discord_username=discord_username,
+                real_name=real_name,
+                rotation_position=new_position,
+            )
+
+            session.add(new_user)
+            session.commit()
+
+            # Get total users for context
+            total_users = session.query(User).count()
+
+            # Calculate when their first turn would be
+            rotation_state = session.query(RotationState).first()
+            if rotation_state and rotation_state.rotation_start_date:
+                # Calculate their first period
+                # They're at the end of the rotation, so their first turn is after everyone else
+                periods_until_turn = new_position
+                first_turn_start = rotation_state.rotation_start_date + timedelta(
+                    days=14 * periods_until_turn
+                )
+                first_turn_end = first_turn_start + timedelta(days=14)
+                first_turn_str = f"{first_turn_start.strftime('%b %d')} - {first_turn_end.strftime('%b %d, %Y')}"
+            else:
+                first_turn_str = "Rotation not started"
+
+            details = {
+                "username": discord_username,
+                "real_name": real_name,
+                "position": new_position + 1,  # Convert to 1-based for display
+                "total_users": total_users,
+                "first_turn": first_turn_str,
+            }
+
+            message = (
+                f"✅ Added {real_name} (@{discord_username}) to rotation\n"
+                f"Position: #{new_position + 1} of {total_users}"
+            )
+
+            logger.info(
+                f"Added user {real_name} (@{discord_username}) to rotation at position {new_position}"
+            )
+
+            return True, message, details
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error adding user to rotation: {e}")
+            return False, f"Error adding user: {str(e)}", {}
+        finally:
+            session.close()
+
+    async def remove_user_from_rotation(
+        self, discord_username: str
+    ) -> tuple[bool, str, dict]:
+        """
+        Remove a user from active rotation while preserving their historical data
+
+        Args:
+            discord_username: Discord username to remove from active rotation
+
+        Returns:
+            Tuple of (success, message, details)
+        """
+        session = self.db.get_session()
+        try:
+            # Find the user
+            user_to_remove = (
+                session.query(User)
+                .filter(User.discord_username == discord_username)
+                .first()
+            )
+
+            if not user_to_remove:
+                return False, f"User @{discord_username} not found in rotation", {}
+
+            removed_position = user_to_remove.rotation_position
+            removed_name = user_to_remove.real_name
+            removed_id = user_to_remove.id
+
+            # Count their historical data (for info only, not deleting)
+            pick_count = (
+                session.query(MoviePick)
+                .filter(MoviePick.picker_user_id == removed_id)
+                .count()
+            )
+
+            rating_count = (
+                session.query(MovieRating)
+                .filter(MovieRating.rater_user_id == removed_id)
+                .count()
+            )
+
+            # Check if they're currently scheduled or have future picks
+            from models.database import RotationSkip
+
+            # Get current and next picker to check if they're active
+            try:
+                current_user, current_start, current_end = (
+                    await self.get_current_picker()
+                )
+                is_current = current_user.id == removed_id if current_user else False
+
+                next_user, next_start, next_end = await self.get_next_picker()
+                is_next = next_user.id == removed_id if next_user else False
+            except:
+                is_current = False
+                is_next = False
+
+            # Delete any future skips for this user (they won't need them anymore)
+            now = datetime.now()
+            future_skips = (
+                session.query(RotationSkip)
+                .filter(
+                    RotationSkip.skipped_user_id == removed_id,
+                    RotationSkip.original_start_date >= now.date(),
+                )
+                .delete()
+            )
+
+            # Set rotation_position to NULL to mark them as inactive
+            # This preserves the user record for historical relationships
+            user_to_remove.rotation_position = None
+
+            # Reorganize positions for active users after the removed one
+            users_to_shift = (
+                session.query(User)
+                .filter(
+                    User.rotation_position > removed_position,
+                    User.rotation_position.isnot(None),  # Only active users
+                )
+                .all()
+            )
+
+            for user in users_to_shift:
+                user.rotation_position -= 1
+
+            session.commit()
+
+            # Get new total of active users
+            active_users = (
+                session.query(User).filter(User.rotation_position.isnot(None)).count()
+            )
+
+            details = {
+                "removed_user": removed_name,
+                "removed_position": removed_position + 1,
+                "picks_preserved": pick_count,
+                "ratings_preserved": rating_count,
+                "future_skips_removed": future_skips,
+                "remaining_active_users": active_users,
+                "was_current": is_current,
+                "was_next": is_next,
+            }
+
+            status_notes = []
+            if is_current:
+                status_notes.append("Was current picker")
+            if is_next:
+                status_notes.append("Was next picker")
+            if future_skips > 0:
+                status_notes.append(f"Removed {future_skips} future skip(s)")
+
+            message = (
+                f"✅ Removed {removed_name} (@{discord_username}) from active rotation\n"
+                f"Preserved {pick_count} picks and {rating_count} ratings for history\n"
+                f"Active members remaining: {active_users}"
+            )
+
+            if status_notes:
+                message += f"\nNotes: {', '.join(status_notes)}"
+
+            logger.info(
+                f"Removed user {removed_name} (@{discord_username}) from active rotation, preserved historical data"
+            )
+
+            return True, message, details
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error removing user from rotation: {e}")
+            return False, f"Error removing user: {str(e)}", {}
+        finally:
+            session.close()
+
+    async def reactivate_user(
+        self, discord_username: str, position: int = None
+    ) -> tuple[bool, str, dict]:
+        """
+        Reactivate a previously removed user back into the rotation
+
+        Args:
+            discord_username: Discord username to reactivate
+            position: Optional specific position (0-based), defaults to end
+
+        Returns:
+            Tuple of (success, message, details)
+        """
+        session = self.db.get_session()
+        try:
+            # Find the inactive user
+            user_to_reactivate = (
+                session.query(User)
+                .filter(
+                    User.discord_username == discord_username,
+                    User.rotation_position.is_(None),  # Only inactive users
+                )
+                .first()
+            )
+
+            if not user_to_reactivate:
+                # Check if they're already active
+                active_user = (
+                    session.query(User)
+                    .filter(
+                        User.discord_username == discord_username,
+                        User.rotation_position.isnot(None),
+                    )
+                    .first()
+                )
+
+                if active_user:
+                    return (
+                        False,
+                        f"User @{discord_username} is already active in rotation",
+                        {},
+                    )
+                else:
+                    return False, f"User @{discord_username} not found in system", {}
+
+            # Get current max position
+            max_position = session.query(func.max(User.rotation_position)).scalar()
+
+            if max_position is None:
+                new_position = 0
+            elif position is not None and 0 <= position <= max_position + 1:
+                # Insert at specific position
+                # Shift users at or after this position
+                users_to_shift = (
+                    session.query(User)
+                    .filter(
+                        User.rotation_position >= position,
+                        User.rotation_position.isnot(None),
+                    )
+                    .all()
+                )
+
+                for user in users_to_shift:
+                    user.rotation_position += 1
+
+                new_position = position
+            else:
+                # Add to end
+                new_position = max_position + 1
+
+            # Reactivate the user
+            user_to_reactivate.rotation_position = new_position
+            session.commit()
+
+            # Get stats
+            pick_count = (
+                session.query(MoviePick)
+                .filter(MoviePick.picker_user_id == user_to_reactivate.id)
+                .count()
+            )
+
+            active_users = (
+                session.query(User).filter(User.rotation_position.isnot(None)).count()
+            )
+
+            details = {
+                "username": discord_username,
+                "real_name": user_to_reactivate.real_name,
+                "position": new_position + 1,
+                "total_active": active_users,
+                "historical_picks": pick_count,
+            }
+
+            message = (
+                f"✅ Reactivated {user_to_reactivate.real_name} (@{discord_username})\n"
+                f"Position: #{new_position + 1} of {active_users} active members\n"
+                f"Historical picks retained: {pick_count}"
+            )
+
+            logger.info(
+                f"Reactivated user {user_to_reactivate.real_name} at position {new_position}"
+            )
+
+            return True, message, details
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error reactivating user: {e}")
+            return False, f"Error reactivating user: {str(e)}", {}
+        finally:
+            session.close()
+
+    async def list_inactive_users(self) -> list[dict]:
+        """
+        Get list of all inactive users (removed but with preserved history)
+
+        Returns:
+            List of inactive user dictionaries
+        """
+        session = self.db.get_session()
+        try:
+            inactive_users = (
+                session.query(User).filter(User.rotation_position.is_(None)).all()
+            )
+
+            result = []
+            for user in inactive_users:
+                pick_count = (
+                    session.query(MoviePick)
+                    .filter(MoviePick.picker_user_id == user.id)
+                    .count()
+                )
+
+                rating_count = (
+                    session.query(MovieRating)
+                    .filter(MovieRating.rater_user_id == user.id)
+                    .count()
+                )
+
+                result.append(
+                    {
+                        "username": user.discord_username,
+                        "real_name": user.real_name,
+                        "picks": pick_count,
+                        "ratings": rating_count,
+                    }
+                )
+
+            return result
+
+        finally:
+            session.close()
