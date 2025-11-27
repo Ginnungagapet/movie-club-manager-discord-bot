@@ -38,6 +38,14 @@ class MovieService:
             search_func = partial(self.ia.search_movie, query)
             movies = await loop.run_in_executor(None, search_func)
 
+            logger.info(
+                f"Search returned {len(movies) if movies else 0} results")
+
+            if movies:
+                for i, movie in enumerate(movies[:5]):
+                    logger.info(
+                        f"  Result {i}: {movie.get('title')} ({movie.get('year')})")
+
             if not movies:
                 return (
                     False,
@@ -79,7 +87,8 @@ class MovieService:
             return movies[0]  # Return first result if no year specified
 
         # Try exact year match first
-        exact_matches = [movie for movie in movies if movie.get("year") == target_year]
+        exact_matches = [
+            movie for movie in movies if movie.get("year") == target_year]
         if exact_matches:
             return exact_matches[0]
 
@@ -92,7 +101,8 @@ class MovieService:
 
         if fuzzy_matches:
             # Sort by how close the year is to target
-            fuzzy_matches.sort(key=lambda m: abs(m.get("year", 9999) - target_year))
+            fuzzy_matches.sort(key=lambda m: abs(
+                m.get("year", 9999) - target_year))
             return fuzzy_matches[0]
 
         # Return best overall match if no year matches
@@ -131,7 +141,8 @@ class MovieService:
             "title": movie_details.get("title"),
             "year": movie_details.get("year"),
             "imdb_id": (
-                movie_details.movieID if hasattr(movie_details, "movieID") else None
+                movie_details.movieID if hasattr(
+                    movie_details, "movieID") else None
             ),
             "genres": movie_details.get("genres", []),
             "rating": movie_details.get("rating"),
@@ -146,7 +157,8 @@ class MovieService:
             "cast": [c.get("name", str(c)) for c in movie_details.get("cast", [])[:5]],
             "plot": movie_details.get("plot outline")
             or (
-                movie_details.get("plot", [""])[0] if movie_details.get("plot") else ""
+                movie_details.get("plot", [""])[
+                    0] if movie_details.get("plot") else ""
             ),
             "poster_url": movie_details.get("full-size cover url"),
         }
