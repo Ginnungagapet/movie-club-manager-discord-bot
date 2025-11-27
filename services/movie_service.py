@@ -6,8 +6,8 @@ import asyncio
 from functools import partial
 from typing import Optional, Tuple, Dict, Any
 import logging
-
-from imdb import IMDb
+import aiohttp
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -17,67 +17,56 @@ class MovieService:
 
     def __init__(self, settings):
         self.settings = settings
-        self.ia = IMDb()
+        self.omdb_api_key = os.environ.get('OMDB_API_KEY')
 
     async def search_movie(
         self, query: str, year: Optional[int] = None
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-        """
-        Search for a movie and return the best match
+        """Search for a movie using OMDb API"""
 
-        Args:
-            query: Movie title to search for
-            year: Optional year to filter results
+        clean_query = query.replace('\\', '')
 
-        Returns:
-            Tuple of (success, message, movie_details)
-        """
         try:
-            # Search IMDB for movies
-            loop = asyncio.get_event_loop()
-            search_func = partial(self.ia.search_movie, query)
-            movies = await loop.run_in_executor(None, search_func)
+            params = {
+                't': clean_query,
+                'apikey': self.omdb_api_key,
+                'type': 'movie'
+            }
+            if year:
+                params['y'] = str(year)
 
-            logger.info(
-                f"Search returned {len(movies) if movies else 0} results")
+            async with aiohttp.ClientSession() as session:
+                async with session.get('http://www.omdbapi.com/', params=params) as response:
+                    data = await response.json()
 
-            if movies:
-                for i, movie in enumerate(movies[:5]):
                     logger.info(
-                        f"  Result {i}: {movie.get('title')} ({movie.get('year')})")
+                        f"OMDb response for '{clean_query}': {data.get('Response')}")
 
-            if not movies:
-                return (
-                    False,
-                    f"❌ No movies found for **{query}**{f' ({year})' if year else ''}",
-                    None,
-                )
+                    if data.get('Response') == 'False':
+                        return (
+                            False,
+                            f"❌ No movies found for **{query}**{f' ({year})' if year else ''}",
+                            None
+                        )
 
-            # Filter by year if specified
-            best_match = await self._find_best_match(movies, year)
+                    movie_details = {
+                        'title': data.get('Title'),
+                        'year': int(data.get('Year', '0').split('–')[0]) if data.get('Year') else None,
+                        'rating': float(data.get('imdbRating', 0)) if data.get('imdbRating') != 'N/A' else None,
+                        'plot': data.get('Plot'),
+                        'genres': data.get('Genre', '').split(', ') if data.get('Genre') else [],
+                        'directors': data.get('Director', '').split(', ') if data.get('Director') else [],
+                        'cast': data.get('Actors', '').split(', ') if data.get('Actors') else [],
+                        'cover_url': data.get('Poster') if data.get('Poster') != 'N/A' else None,
+                        'imdb_id': data.get('imdbID'),
+                        'imdb_url': f"https://www.imdb.com/title/{data.get('imdbID')}/"
+                    }
 
-            if not best_match:
-                return (
-                    False,
-                    f"❌ No suitable matches found for **{query}**{f' ({year})' if year else ''}",
-                    None,
-                )
-
-            # Get detailed movie information
-            detailed_movie = await self._get_movie_details(best_match)
-
-            # Create response message
-            actual_year = detailed_movie.get("year")
-            if year and actual_year and actual_year != year:
-                message = f"🎬 **{detailed_movie['title']}** found! (Found {actual_year}, searched for {year})"
-            else:
-                message = f"🎬 **{detailed_movie['title']}** found!"
-
-            return True, message, detailed_movie
+                    return (True, "Success", movie_details)
 
         except Exception as e:
-            logger.error(f"Error searching for movie '{query}': {e}")
-            return False, f"❌ Error searching for movie: {str(e)}", None
+            logger.error(f"Error searching movie: {e}", exc_info=True)
+            return (False, f"❌ Error: {str(e)}", None)
 
     async def _find_best_match(
         self, movies: list, target_year: Optional[int] = None
