@@ -6,6 +6,8 @@ import asyncio
 from functools import partial
 from typing import Optional, Tuple, Dict, Any
 import logging
+from fuzzywuzzy import fuzz
+import re
 
 from imdb import IMDb
 
@@ -22,54 +24,76 @@ class MovieService:
     async def search_movie(
         self, query: str, year: Optional[int] = None
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
-        """
-        Search for a movie and return the best match
+        """Search for a movie and return the best match"""
 
-        Args:
-            query: Movie title to search for
-            year: Optional year to filter results
+        # Clean any escape characters
+        clean_query = query.replace('\\', '')
 
-        Returns:
-            Tuple of (success, message, movie_details)
-        """
         try:
-            # Search IMDB for movies
             loop = asyncio.get_event_loop()
-            search_func = partial(self.ia.search_movie, query)
-            movies = await loop.run_in_executor(None, search_func)
 
-            if not movies:
+            # Try multiple search strategies
+            search_variations = [
+                clean_query,  # Original
+                re.sub(r'[:.!?-]', ' ', clean_query),  # Remove punctuation
+                # Remove numbers (last resort)
+                re.sub(r'\d+', '', clean_query),
+            ]
+
+            all_movies = []
+            for search_term in search_variations:
+                search_func = partial(
+                    self.ia.search_movie, search_term.strip())
+                movies = await loop.run_in_executor(None, search_func)
+                all_movies.extend(movies)
+
+                if movies:
+                    break  # Stop if we found something
+
+            if not all_movies:
                 return (
                     False,
                     f"❌ No movies found for **{query}**{f' ({year})' if year else ''}",
                     None,
                 )
 
-            # Filter by year if specified
-            best_match = await self._find_best_match(movies, year)
+            # Use fuzzy matching to find best match
+            best_match = None
+            best_score = 0
 
-            if not best_match:
+            for movie in all_movies:
+                title = movie.get('title', '')
+                movie_year = movie.get('year')
+
+                # Calculate fuzzy score
+                score = fuzz.ratio(clean_query.lower(), title.lower())
+
+                # Boost score if year matches
+                if year and movie_year == year:
+                    score += 20
+
+                if score > best_score:
+                    best_score = score
+                    best_match = movie
+
+            # Require minimum score of 60
+            if best_score < 60:
                 return (
                     False,
-                    f"❌ No suitable matches found for **{query}**{f' ({year})' if year else ''}",
+                    f"❌ No good matches found for **{query}**",
                     None,
                 )
 
-            # Get detailed movie information
-            detailed_movie = await self._get_movie_details(best_match)
+            # Get full movie details
+            movie_id = best_match.movieID
+            get_movie_func = partial(self.ia.get_movie, movie_id)
+            movie_details = await loop.run_in_executor(None, get_movie_func)
 
-            # Create response message
-            actual_year = detailed_movie.get("year")
-            if year and actual_year and actual_year != year:
-                message = f"🎬 **{detailed_movie['title']}** found! (Found {actual_year}, searched for {year})"
-            else:
-                message = f"🎬 **{detailed_movie['title']}** found!"
-
-            return True, message, detailed_movie
+            return (True, "Success", movie_details)
 
         except Exception as e:
-            logger.error(f"Error searching for movie '{query}': {e}")
-            return False, f"❌ Error searching for movie: {str(e)}", None
+            logger.error(f"Error searching movie: {e}")
+            return (False, f"❌ Error: {str(e)}", None)
 
     async def _find_best_match(
         self, movies: list, target_year: Optional[int] = None
@@ -79,7 +103,8 @@ class MovieService:
             return movies[0]  # Return first result if no year specified
 
         # Try exact year match first
-        exact_matches = [movie for movie in movies if movie.get("year") == target_year]
+        exact_matches = [
+            movie for movie in movies if movie.get("year") == target_year]
         if exact_matches:
             return exact_matches[0]
 
@@ -92,7 +117,8 @@ class MovieService:
 
         if fuzzy_matches:
             # Sort by how close the year is to target
-            fuzzy_matches.sort(key=lambda m: abs(m.get("year", 9999) - target_year))
+            fuzzy_matches.sort(key=lambda m: abs(
+                m.get("year", 9999) - target_year))
             return fuzzy_matches[0]
 
         # Return best overall match if no year matches
@@ -131,7 +157,8 @@ class MovieService:
             "title": movie_details.get("title"),
             "year": movie_details.get("year"),
             "imdb_id": (
-                movie_details.movieID if hasattr(movie_details, "movieID") else None
+                movie_details.movieID if hasattr(
+                    movie_details, "movieID") else None
             ),
             "genres": movie_details.get("genres", []),
             "rating": movie_details.get("rating"),
@@ -146,7 +173,8 @@ class MovieService:
             "cast": [c.get("name", str(c)) for c in movie_details.get("cast", [])[:5]],
             "plot": movie_details.get("plot outline")
             or (
-                movie_details.get("plot", [""])[0] if movie_details.get("plot") else ""
+                movie_details.get("plot", [""])[
+                    0] if movie_details.get("plot") else ""
             ),
             "poster_url": movie_details.get("full-size cover url"),
         }

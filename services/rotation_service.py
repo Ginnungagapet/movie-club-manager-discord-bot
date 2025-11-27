@@ -237,7 +237,8 @@ class RotationService:
                     f"Next picker is now {new_next_user.real_name}"
                 )
 
-            logger.info(f"Skipped {skipped_user_name}'s period ({skip_period_str})")
+            logger.info(
+                f"Skipped {skipped_user_name}'s period ({skip_period_str})")
             return True, message, details
 
         except Exception as e:
@@ -246,7 +247,8 @@ class RotationService:
             return (
                 True,
                 f"✅ Skip successful, but could not retrieve new picker info",
-                {"skipped_user": skipped_user_name, "skipped_period": skip_period_str},
+                {"skipped_user": skipped_user_name,
+                    "skipped_period": skip_period_str},
             )
 
     async def get_skips_for_period(
@@ -311,7 +313,7 @@ class RotationService:
             session.close()
 
     async def get_current_picker(self) -> Tuple[User, datetime, datetime]:
-        """Get current picker information, accounting for skips"""
+        """Get current picker information, accounting for skips (ONLY ACTIVE USERS)"""
         session = self.db.get_session()
         try:
             from models.database import RotationSkip
@@ -324,9 +326,13 @@ class RotationService:
             start_date = rotation_state.rotation_start_date
             days_since_start = (now - start_date).days
 
-            users = session.query(User).order_by(User.rotation_position).all()
+            # CRITICAL: Only get ACTIVE users
+            users = session.query(User).filter(
+                User.rotation_position.isnot(None)
+            ).order_by(User.rotation_position).all()
+
             if not users:
-                raise ValueError("No users in rotation")
+                raise ValueError("No active users in rotation")
 
             # We need to figure out who the current picker is by checking each period
             # and accounting for skips
@@ -358,7 +364,7 @@ class RotationService:
 
                 # Move to next period
                 if not skip_exists:
-                    # Only advance the position if this period wasn't skipped
+                    # Only advance the period if this period wasn't skipped
                     current_period_start = current_period_end
                 position_index += 1
 
@@ -366,7 +372,8 @@ class RotationService:
             periods_passed = days_since_start // 14
             current_position = periods_passed % len(users)
             current_user = users[current_position]
-            current_period_start = start_date + timedelta(days=periods_passed * 14)
+            current_period_start = start_date + \
+                timedelta(days=periods_passed * 14)
             current_period_end = current_period_start + timedelta(days=14)
 
             return current_user, current_period_start, current_period_end
@@ -375,16 +382,20 @@ class RotationService:
             session.close()
 
     async def get_next_picker(self) -> Tuple[User, datetime, datetime]:
-        """Get next picker information, accounting for skips"""
+        """Get next picker information, accounting for skips (ONLY ACTIVE USERS)"""
         session = self.db.get_session()
         try:
             from models.database import RotationSkip
 
             current_user, _, current_end = await self.get_current_picker()
-            users = session.query(User).order_by(User.rotation_position).all()
+
+            # CRITICAL: Only get ACTIVE users
+            users = session.query(User).filter(
+                User.rotation_position.isnot(None)
+            ).order_by(User.rotation_position).all()
 
             if not users:
-                raise ValueError("No users in rotation")
+                raise ValueError("No active users in rotation")
 
             # Start checking from the next position after current
             check_position = (current_user.rotation_position + 1) % len(users)
@@ -416,7 +427,8 @@ class RotationService:
                 attempts += 1
 
             # Fallback (shouldn't happen)
-            raise ValueError("Unable to find next picker after checking all positions")
+            raise ValueError(
+                "Unable to find next picker after checking all positions")
 
         finally:
             session.close()
@@ -425,7 +437,8 @@ class RotationService:
         """Check if user can pick a movie right now"""
         session = self.db.get_session()
         try:
-            user = session.query(User).filter(User.discord_username == username).first()
+            user = session.query(User).filter(
+                User.discord_username == username).first()
             if not user:
                 return False, f"User {username} is not in the rotation"
 
@@ -475,7 +488,8 @@ class RotationService:
         DEPRECATED: Use add_or_update_movie_pick instead
         This method is kept for backward compatibility
         """
-        logger.warning("add_movie_pick is deprecated, use add_or_update_movie_pick")
+        logger.warning(
+            "add_movie_pick is deprecated, use add_or_update_movie_pick")
         return await self.add_or_update_movie_pick(
             username=username,
             movie_title=movie_title,
@@ -495,7 +509,8 @@ class RotationService:
         """Add a historical movie pick with custom date"""
         session = self.db.get_session()
         try:
-            user = session.query(User).filter(User.discord_username == username).first()
+            user = session.query(User).filter(
+                User.discord_username == username).first()
             if not user:
                 raise ValueError(f"User {username} not found")
 
@@ -544,7 +559,8 @@ class RotationService:
             picks = (
                 session.query(MoviePick)
                 .options(
-                    joinedload(MoviePick.picker),  # Eagerly load picker relationship
+                    # Eagerly load picker relationship
+                    joinedload(MoviePick.picker),
                     joinedload(MoviePick.ratings).joinedload(
                         MovieRating.rater
                     ),  # Eagerly load ratings and raters
@@ -564,14 +580,16 @@ class RotationService:
         try:
             from sqlalchemy.orm import joinedload
 
-            user = session.query(User).filter(User.discord_username == username).first()
+            user = session.query(User).filter(
+                User.discord_username == username).first()
             if not user:
                 return []
 
             picks = (
                 session.query(MoviePick)
                 .options(
-                    joinedload(MoviePick.picker),  # Eagerly load picker relationship
+                    # Eagerly load picker relationship
+                    joinedload(MoviePick.picker),
                     joinedload(MoviePick.ratings).joinedload(
                         MovieRating.rater
                     ),  # Eagerly load ratings and raters
@@ -597,14 +615,18 @@ class RotationService:
         self, periods: int = 5
     ) -> List[Tuple[User, datetime, datetime, bool, bool]]:
         """
-        Get upcoming schedule with skip information
+        Get upcoming schedule with skip information (ONLY ACTIVE USERS)
         Returns: List of (user, start, end, is_current, is_skipped)
         """
         session = self.db.get_session()
         try:
             from models.database import RotationSkip
 
-            users = session.query(User).order_by(User.rotation_position).all()
+            # CRITICAL: Only get ACTIVE users (non-NULL rotation_position)
+            users = session.query(User).filter(
+                User.rotation_position.isnot(None)
+            ).order_by(User.rotation_position).all()
+
             if not users:
                 return []
 
@@ -612,7 +634,8 @@ class RotationService:
             schedule = []
 
             # Add current period (never skipped by definition)
-            schedule.append((current_user, current_start, current_end, True, False))
+            schedule.append((current_user, current_start,
+                            current_end, True, False))
 
             # Calculate future periods
             check_position = (current_user.rotation_position + 1) % len(users)
@@ -636,7 +659,8 @@ class RotationService:
 
                 is_skipped = skip_exists is not None
 
-                schedule.append((check_user, check_start, check_end, False, is_skipped))
+                schedule.append(
+                    (check_user, check_start, check_end, False, is_skipped))
 
                 check_position = (check_position + 1) % len(users)
                 periods_added += 1
@@ -738,7 +762,8 @@ class RotationService:
             # Calculate average rating (ratings were loaded in get_recent_picks)
             rating_info = ""
             if pick.ratings:
-                avg_rating = sum(r.rating for r in pick.ratings) / len(pick.ratings)
+                avg_rating = sum(
+                    r.rating for r in pick.ratings) / len(pick.ratings)
                 rating_info = f" ⭐ {avg_rating:.1f}/10 ({len(pick.ratings)} ratings)"
 
             embed.add_field(
@@ -754,7 +779,8 @@ class RotationService:
         session = self.db.get_session()
         try:
             movie_pick = (
-                session.query(MoviePick).filter(MoviePick.id == movie_id).first()
+                session.query(MoviePick).filter(
+                    MoviePick.id == movie_id).first()
             )
 
             if movie_pick:
@@ -805,17 +831,21 @@ class RotationService:
             # User stats
             total_users = session.query(User).count()
             active_users = (
-                session.query(User).filter(User.rotation_position.isnot(None)).count()
+                session.query(User).filter(
+                    User.rotation_position.isnot(None)).count()
             )
 
             # Movie stats
             total_picks = session.query(MoviePick).count()
-            rated_movies = session.query(MoviePick).join(MovieRating).distinct().count()
+            rated_movies = session.query(MoviePick).join(
+                MovieRating).distinct().count()
 
             # Rating stats
             total_ratings = session.query(MovieRating).count()
-            avg_rating_result = session.query(func.avg(MovieRating.rating)).scalar()
-            average_rating = float(avg_rating_result) if avg_rating_result else 0.0
+            avg_rating_result = session.query(
+                func.avg(MovieRating.rating)).scalar()
+            average_rating = float(
+                avg_rating_result) if avg_rating_result else 0.0
 
             # Current rotation info
             try:
@@ -856,7 +886,8 @@ class RotationService:
         try:
             from sqlalchemy.orm import joinedload
 
-            user = session.query(User).filter(User.discord_username == username).first()
+            user = session.query(User).filter(
+                User.discord_username == username).first()
             if not user:
                 raise ValueError(f"User {username} not found")
 
@@ -942,7 +973,8 @@ class RotationService:
                 session.query(MoviePick)
                 .options(
                     joinedload(MoviePick.picker),
-                    joinedload(MoviePick.ratings).joinedload(MovieRating.rater),
+                    joinedload(MoviePick.ratings).joinedload(
+                        MovieRating.rater),
                 )
                 .filter(
                     MoviePick.picker_user_id == current_user.id,
@@ -963,7 +995,8 @@ class RotationService:
         try:
             from sqlalchemy.orm import joinedload
 
-            user = session.query(User).filter(User.discord_username == username).first()
+            user = session.query(User).filter(
+                User.discord_username == username).first()
             if not user:
                 return None
 
@@ -976,7 +1009,8 @@ class RotationService:
                     session.query(MoviePick)
                     .options(
                         joinedload(MoviePick.picker),
-                        joinedload(MoviePick.ratings).joinedload(MovieRating.rater),
+                        joinedload(MoviePick.ratings).joinedload(
+                            MovieRating.rater),
                     )
                     .filter(
                         MoviePick.picker_user_id == user.id,
@@ -995,7 +1029,8 @@ class RotationService:
                         session.query(MoviePick)
                         .options(
                             joinedload(MoviePick.picker),
-                            joinedload(MoviePick.ratings).joinedload(MovieRating.rater),
+                            joinedload(MoviePick.ratings).joinedload(
+                                MovieRating.rater),
                         )
                         .filter(
                             MoviePick.picker_user_id == user.id,
@@ -1022,7 +1057,8 @@ class RotationService:
                 session.query(MoviePick)
                 .options(
                     joinedload(MoviePick.picker),
-                    joinedload(MoviePick.ratings).joinedload(MovieRating.rater),
+                    joinedload(MoviePick.ratings).joinedload(
+                        MovieRating.rater),
                 )
                 .filter(
                     MoviePick.period_start_date == period_start.date(),
@@ -1140,9 +1176,7 @@ class RotationService:
         finally:
             session.close()
 
-    async def remove_user_from_rotation(
-        self, discord_username: str
-    ) -> tuple[bool, str, dict]:
+    async def remove_user_from_rotation(self, discord_username: str) -> tuple[bool, str, dict]:
         """
         Remove a user from active rotation while preserving their historical data
 
@@ -1154,83 +1188,77 @@ class RotationService:
         """
         session = self.db.get_session()
         try:
+            from models.database import RotationSkip
+            from sqlalchemy import func
+
             # Find the user
-            user_to_remove = (
-                session.query(User)
-                .filter(User.discord_username == discord_username)
-                .first()
-            )
+            user_to_remove = session.query(User).filter(
+                User.discord_username == discord_username
+            ).first()
 
             if not user_to_remove:
                 return False, f"User @{discord_username} not found in rotation", {}
+
+            # Check if already inactive
+            if user_to_remove.rotation_position is None:
+                return False, f"User @{discord_username} is already inactive", {}
 
             removed_position = user_to_remove.rotation_position
             removed_name = user_to_remove.real_name
             removed_id = user_to_remove.id
 
             # Count their historical data (for info only, not deleting)
-            pick_count = (
-                session.query(MoviePick)
-                .filter(MoviePick.picker_user_id == removed_id)
-                .count()
-            )
+            pick_count = session.query(MoviePick).filter(
+                MoviePick.picker_user_id == removed_id
+            ).count()
 
-            rating_count = (
-                session.query(MovieRating)
-                .filter(MovieRating.rater_user_id == removed_id)
-                .count()
-            )
+            rating_count = session.query(MovieRating).filter(
+                MovieRating.rater_user_id == removed_id
+            ).count()
 
             # Check if they're currently scheduled or have future picks
-            from models.database import RotationSkip
+            is_current = False
+            is_next = False
 
-            # Get current and next picker to check if they're active
             try:
-                current_user, current_start, current_end = (
-                    await self.get_current_picker()
-                )
-                is_current = current_user.id == removed_id if current_user else False
+                # Get current and next picker to check if they're active
+                # We need to check BEFORE we remove them
+                current_user, current_start, current_end = await self.get_current_picker()
+                is_current = (current_user.id ==
+                              removed_id) if current_user else False
 
                 next_user, next_start, next_end = await self.get_next_picker()
-                is_next = next_user.id == removed_id if next_user else False
+                is_next = (next_user.id == removed_id) if next_user else False
             except:
-                is_current = False
-                is_next = False
+                pass
 
             # Delete any future skips for this user (they won't need them anymore)
             now = datetime.now()
-            future_skips = (
-                session.query(RotationSkip)
-                .filter(
-                    RotationSkip.skipped_user_id == removed_id,
-                    RotationSkip.original_start_date >= now.date(),
-                )
-                .delete()
-            )
+            future_skips = session.query(RotationSkip).filter(
+                RotationSkip.skipped_user_id == removed_id,
+                RotationSkip.original_start_date >= now.date()
+            ).delete()
 
             # Set rotation_position to NULL to mark them as inactive
             # This preserves the user record for historical relationships
             user_to_remove.rotation_position = None
 
             # Reorganize positions for active users after the removed one
-            users_to_shift = (
-                session.query(User)
-                .filter(
-                    User.rotation_position > removed_position,
-                    User.rotation_position.isnot(None),  # Only active users
-                )
-                .all()
-            )
+            # IMPORTANT: Only shift users with non-NULL positions
+            users_to_shift = session.query(User).filter(
+                User.rotation_position > removed_position,
+                User.rotation_position.isnot(None)  # Only active users
+            ).all()
 
             for user in users_to_shift:
                 user.rotation_position -= 1
 
             session.commit()
 
-            # Get new total of active users
-            active_users = (
-                session.query(User).filter(User.rotation_position.isnot(None)).count()
-            )
+            # Get new total of active users (excluding NULL positions)
+            active_users = session.query(User).filter(
+                User.rotation_position.isnot(None)
+            ).count()
 
             details = {
                 "removed_user": removed_name,
@@ -1240,29 +1268,26 @@ class RotationService:
                 "future_skips_removed": future_skips,
                 "remaining_active_users": active_users,
                 "was_current": is_current,
-                "was_next": is_next,
+                "was_next": is_next
             }
 
             status_notes = []
             if is_current:
-                status_notes.append("Was current picker")
+                status_notes.append("Was current picker - schedule updated")
             if is_next:
-                status_notes.append("Was next picker")
+                status_notes.append("Was next picker - schedule updated")
             if future_skips > 0:
                 status_notes.append(f"Removed {future_skips} future skip(s)")
 
-            message = (
-                f"✅ Removed {removed_name} (@{discord_username}) from active rotation\n"
-                f"Preserved {pick_count} picks and {rating_count} ratings for history\n"
-                f"Active members remaining: {active_users}"
-            )
+            message = (f"✅ Removed {removed_name} (@{discord_username}) from active rotation\n"
+                       f"Preserved {pick_count} picks and {rating_count} ratings for history\n"
+                       f"Active members remaining: {active_users}")
 
             if status_notes:
                 message += f"\nNotes: {', '.join(status_notes)}"
 
             logger.info(
-                f"Removed user {removed_name} (@{discord_username}) from active rotation, preserved historical data"
-            )
+                f"Removed user {removed_name} (@{discord_username}) from active rotation, preserved historical data")
 
             return True, message, details
 
@@ -1319,7 +1344,8 @@ class RotationService:
                     return False, f"User @{discord_username} not found in system", {}
 
             # Get current max position
-            max_position = session.query(func.max(User.rotation_position)).scalar()
+            max_position = session.query(
+                func.max(User.rotation_position)).scalar()
 
             if max_position is None:
                 new_position = 0
@@ -1355,7 +1381,8 @@ class RotationService:
             )
 
             active_users = (
-                session.query(User).filter(User.rotation_position.isnot(None)).count()
+                session.query(User).filter(
+                    User.rotation_position.isnot(None)).count()
             )
 
             details = {
@@ -1395,7 +1422,8 @@ class RotationService:
         session = self.db.get_session()
         try:
             inactive_users = (
-                session.query(User).filter(User.rotation_position.is_(None)).all()
+                session.query(User).filter(
+                    User.rotation_position.is_(None)).all()
             )
 
             result = []
