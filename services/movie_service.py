@@ -53,6 +53,7 @@ class MovieService:
                         'title': data.get('Title'),
                         'year': int(data.get('Year', '0').split('–')[0]) if data.get('Year') else None,
                         'rating': float(data.get('imdbRating', 0)) if data.get('imdbRating') != 'N/A' else None,
+                        'runtime': data.get('Runtime', '').replace(' min', '') if data.get('Runtime') != 'N/A' else None,
                         'plot': data.get('Plot'),
                         'genres': data.get('Genre', '').split(', ') if data.get('Genre') else [],
                         'directors': data.get('Director', '').split(', ') if data.get('Director') else [],
@@ -126,28 +127,19 @@ class MovieService:
         if not movie_details:
             return {}
 
+        # OMDb returns simple data, no need for complex extraction
         return {
             "title": movie_details.get("title"),
             "year": movie_details.get("year"),
-            "imdb_id": (
-                movie_details.movieID if hasattr(
-                    movie_details, "movieID") else None
-            ),
+            "imdb_id": movie_details.get("imdb_id"),
             "genres": movie_details.get("genres", []),
             "rating": movie_details.get("rating"),
-            "runtime": (
-                movie_details.get("runtimes", [None])[0]
-                if movie_details.get("runtimes")
-                else None
-            ),
-            "directors": [
-                d.get("name", str(d)) for d in movie_details.get("directors", [])
-            ],
-            "cast": [c.get("name", str(c)) for c in movie_details.get("cast", [])[:5]],
-            "plot": movie_details.get("plot outline")
-            or (
-                movie_details.get("plot", [""])[
-                    0] if movie_details.get("plot") else ""
-            ),
-            "poster_url": movie_details.get("full-size cover url"),
+            # You'll need to add this to search_movie
+            "runtime": movie_details.get("runtime"),
+            # Already a list of strings
+            "directors": movie_details.get("directors", []),
+            "cast": movie_details.get("cast", []),  # Already a list of strings
+            "plot": movie_details.get("plot", ""),
+            # Note: you called it cover_url in search_movie
+            "poster_url": movie_details.get("cover_url"),
         }

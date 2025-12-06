@@ -4,6 +4,7 @@ Movie selection and management commands (Updated - No Movie ID references)
 
 import discord
 from discord.ext import commands
+from datetime import datetime, timedelta
 import logging
 from utils.parsers import parse_movie_input
 from utils.embeds import create_movie_embed
@@ -62,7 +63,8 @@ class MovieCommands(commands.Cog):
 
             if success and movie_details:
                 # Extract movie info for database
-                movie_info = self.movie_service.extract_movie_info(movie_details)
+                movie_info = self.movie_service.extract_movie_info(
+                    movie_details)
 
                 # Determine if this is an early access pick
                 current_user, current_start, current_end = (
@@ -168,7 +170,8 @@ class MovieCommands(commands.Cog):
                     picker_text += (
                         f" on {current_movie_pick.pick_date.strftime('%b %d, %Y')}"
                     )
-                embed.add_field(name="Selected By", value=picker_text, inline=False)
+                embed.add_field(name="Selected By",
+                                value=picker_text, inline=False)
 
                 await ctx.send(embed=embed)
             else:
