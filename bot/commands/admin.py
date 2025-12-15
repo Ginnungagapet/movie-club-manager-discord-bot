@@ -117,7 +117,8 @@ class AdminCommands(commands.Cog):
             )
 
             if reason:
-                confirm_embed.add_field(name="Reason", value=reason, inline=False)
+                confirm_embed.add_field(
+                    name="Reason", value=reason, inline=False)
 
             confirmation_msg = await ctx.send(embed=confirm_embed)
 
@@ -164,7 +165,8 @@ class AdminCommands(commands.Cog):
                     )
 
                 if reason:
-                    result_embed.add_field(name="Reason", value=reason, inline=False)
+                    result_embed.add_field(
+                        name="Reason", value=reason, inline=False)
 
                 # Show updated schedule
                 result_embed.add_field(
@@ -245,7 +247,8 @@ class AdminCommands(commands.Cog):
             )
 
             if reason:
-                confirm_embed.add_field(name="Reason", value=reason, inline=False)
+                confirm_embed.add_field(
+                    name="Reason", value=reason, inline=False)
 
             confirmation_msg = await ctx.send(embed=confirm_embed)
 
@@ -288,7 +291,8 @@ class AdminCommands(commands.Cog):
                 )
 
                 if reason:
-                    result_embed.add_field(name="Reason", value=reason, inline=False)
+                    result_embed.add_field(
+                        name="Reason", value=reason, inline=False)
 
                 # Show updated schedule
                 result_embed.add_field(
@@ -375,7 +379,8 @@ class AdminCommands(commands.Cog):
             from models.database import User, RotationSkip
 
             # Find the user
-            user = session.query(User).filter(User.discord_username == username).first()
+            user = session.query(User).filter(
+                User.discord_username == username).first()
             if not user:
                 await ctx.send(f"❌ User @{username} not found")
                 return
@@ -429,29 +434,53 @@ class AdminCommands(commands.Cog):
 
     @commands.command(name="add_historical_pick")
     @commands.has_permissions(administrator=True)
-    async def add_historical_pick(
-        self,
-        ctx,
-        username: str,
-        movie_title: str,
-        movie_year: int = None,
-        *,
-        pick_date_str: str = None,
-    ):
+    async def add_historical_pick(self, ctx, username: str, *, args: str):
         """
         Add a historical movie pick (Admin only)
         Usage: !add_historical_pick paul "Event Horizon" 1997 "May 10, 2025"
-               !add_historical_pick derek "Sunshine" 2007 "May 25, 2025"
+            !add_historical_pick derek "Sunshine" 2007 "2025-05-10"
+            !add_historical_pick alex "The Matrix"  (uses current date)
         """
         try:
+            import shlex
+
+            # Parse quoted arguments properly
+            parts = shlex.split(args)
+
+            if len(parts) < 1:
+                await ctx.send("❌ Please provide at least a movie title")
+                return
+
+            # Extract arguments
+            movie_title = parts[0]
+            movie_year = None
+            pick_date_str = None
+
+            # Parse remaining arguments
+            if len(parts) >= 2:
+                try:
+                    # Try to parse second argument as year
+                    movie_year = int(parts[1])
+                    # If successful and there's a third argument, it's the date
+                    if len(parts) >= 3:
+                        pick_date_str = parts[2]
+                except ValueError:
+                    # Second part isn't a year, treat it as date
+                    pick_date_str = parts[1]
+
+            logger.info(
+                f"Parsed historical pick: title='{movie_title}', year={movie_year}, date='{pick_date_str}'")
+
             # Parse the pick date if provided
             if pick_date_str:
                 from utils.date_utils import parse_date
 
                 pick_date = parse_date(pick_date_str)
+
                 if not pick_date:
                     await ctx.send(
-                        "❌ Invalid date format. Try: 'May 10, 2025' or '2025-05-10'"
+                        f"❌ Invalid date format: '{pick_date_str}'\n"
+                        f"Try: 'May 10, 2025' or '2025-05-10'"
                     )
                     return
             else:
@@ -463,9 +492,7 @@ class AdminCommands(commands.Cog):
                 await ctx.send(f"❌ User @{username} not found in rotation")
                 return
 
-            # Calculate which period this pick should belong to based on the date
-
-            # Add historical pick with calculated period
+            # Add historical pick
             movie_pick = await self.rotation_service.add_historical_pick(
                 username, movie_title, movie_year, pick_date
             )
@@ -482,18 +509,20 @@ class AdminCommands(commands.Cog):
                 inline=True,
             )
             embed.add_field(
-                name="Pick Date", value=pick_date.strftime("%b %d, %Y"), inline=True
+                name="Pick Date",
+                value=pick_date.strftime("%b %d, %Y"),
+                inline=True
             )
             embed.add_field(
-                name="Movie Added",
-                value=f"Use `!rate [1.0-10.0] {movie_pick.movie_title}` to rate this movie",
+                name="Rate This Movie",
+                value=f"Use `!rate [1.0-10.0] {movie_pick.movie_title}` to rate",
                 inline=False,
             )
 
             await ctx.send(embed=embed)
 
         except Exception as e:
-            logger.error(f"Error adding historical pick: {e}")
+            logger.error(f"Error adding historical pick: {e}", exc_info=True)
             await ctx.send(f"❌ Error adding historical pick: {str(e)}")
 
     @commands.command(name="delete_pick")
@@ -681,7 +710,8 @@ class AdminCommands(commands.Cog):
                 movie_text = current_pick.movie_title
                 if current_pick.movie_year:
                     movie_text += f" ({current_pick.movie_year})"
-                embed.add_field(name="Current Movie", value=movie_text, inline=False)
+                embed.add_field(name="Current Movie",
+                                value=movie_text, inline=False)
 
             await ctx.send(embed=embed)
 
@@ -707,7 +737,8 @@ class AdminCommands(commands.Cog):
             if discord_username.startswith("<@") and discord_username.endswith(">"):
                 # This is a mention, we need to get the actual username
                 user_id = (
-                    discord_username.replace("<@", "").replace(">", "").replace("!", "")
+                    discord_username.replace(
+                        "<@", "").replace(">", "").replace("!", "")
                 )
                 try:
                     user = await self.bot.fetch_user(int(user_id))
@@ -804,7 +835,8 @@ class AdminCommands(commands.Cog):
             if discord_username.startswith("<@") and discord_username.endswith(">"):
                 # This is a mention, get the actual username
                 user_id = (
-                    discord_username.replace("<@", "").replace(">", "").replace("!", "")
+                    discord_username.replace(
+                        "<@", "").replace(">", "").replace("!", "")
                 )
                 try:
                     user = await self.bot.fetch_user(int(user_id))
@@ -956,7 +988,8 @@ class AdminCommands(commands.Cog):
             discord_username = discord_tag.strip()
             if discord_username.startswith("<@") and discord_username.endswith(">"):
                 user_id = (
-                    discord_username.replace("<@", "").replace(">", "").replace("!", "")
+                    discord_username.replace(
+                        "<@", "").replace(">", "").replace("!", "")
                 )
                 try:
                     user = await self.bot.fetch_user(int(user_id))
@@ -1053,7 +1086,8 @@ class AdminCommands(commands.Cog):
                 if user["picks"] > 0 or user["ratings"] > 0:
                     value += f"\n📊 {user['picks']} picks, {user['ratings']} ratings"
 
-                embed.add_field(name=user["real_name"], value=value, inline=True)
+                embed.add_field(name=user["real_name"],
+                                value=value, inline=True)
 
             embed.add_field(
                 name="Reactivation",
@@ -1155,7 +1189,8 @@ class AdminCommands(commands.Cog):
 
             # Handle mentions
             if username1.startswith("<@") and username1.endswith(">"):
-                user_id = username1.replace("<@", "").replace(">", "").replace("!", "")
+                user_id = username1.replace(
+                    "<@", "").replace(">", "").replace("!", "")
                 try:
                     user = await self.bot.fetch_user(int(user_id))
                     username1 = user.name
@@ -1164,7 +1199,8 @@ class AdminCommands(commands.Cog):
                     return
 
             if username2.startswith("<@") and username2.endswith(">"):
-                user_id = username2.replace("<@", "").replace(">", "").replace("!", "")
+                user_id = username2.replace(
+                    "<@", "").replace(">", "").replace("!", "")
                 try:
                     user = await self.bot.fetch_user(int(user_id))
                     username2 = user.name
@@ -1174,10 +1210,12 @@ class AdminCommands(commands.Cog):
 
             # Find both users
             user1_obj = (
-                session.query(User).filter(User.discord_username == username1).first()
+                session.query(User).filter(
+                    User.discord_username == username1).first()
             )
             user2_obj = (
-                session.query(User).filter(User.discord_username == username2).first()
+                session.query(User).filter(
+                    User.discord_username == username2).first()
             )
 
             if not user1_obj:
@@ -1261,9 +1299,11 @@ class AdminCommands(commands.Cog):
 
             # Verify all users exist
             all_users = (
-                session.query(User).filter(User.rotation_position.isnot(None)).all()
+                session.query(User).filter(
+                    User.rotation_position.isnot(None)).all()
             )
-            existing_usernames = {u.discord_username.lower(): u for u in all_users}
+            existing_usernames = {
+                u.discord_username.lower(): u for u in all_users}
 
             # Check for missing users
             for username in usernames:
@@ -1375,7 +1415,8 @@ class AdminCommands(commands.Cog):
 
             await ctx.send(embed=embed)
 
-            logger.info(f"{ctx.author.name} set rotation start date to {new_date}")
+            logger.info(
+                f"{ctx.author.name} set rotation start date to {new_date}")
 
         except Exception as e:
             logger.error(f"Error setting rotation date: {e}")

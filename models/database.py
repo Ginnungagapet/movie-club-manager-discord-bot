@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     JSON,
     Float,
+    Boolean,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -37,6 +38,7 @@ class User(Base):
     discord_username = Column(String(50), unique=True, nullable=False)
     real_name = Column(String(100), nullable=False)
     rotation_position = Column(Integer)
+    is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=func.now())
 
     # Relationships
@@ -102,7 +104,8 @@ class MovieRating(Base):
     __tablename__ = "movie_ratings"
 
     id = Column(Integer, primary_key=True)
-    movie_pick_id = Column(Integer, ForeignKey("movie_picks.id"), nullable=False)
+    movie_pick_id = Column(Integer, ForeignKey(
+        "movie_picks.id"), nullable=False)
     rater_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     rating = Column(Float, nullable=False)
     review_text = Column(Text)
@@ -113,7 +116,8 @@ class MovieRating(Base):
         UniqueConstraint(
             "movie_pick_id", "rater_user_id", name="unique_user_movie_rating"
         ),
-        CheckConstraint("rating >= 1.0 AND rating <= 10.0", name="rating_range_check"),
+        CheckConstraint("rating >= 1.0 AND rating <= 10.0",
+                        name="rating_range_check"),
     )
 
     # Relationships
@@ -138,7 +142,8 @@ class RotationState(Base):
     current_user = relationship("User")
 
     # Constraint to ensure only one row
-    __table_args__ = (CheckConstraint("id = 1", name="singleton_rotation_state"),)
+    __table_args__ = (CheckConstraint(
+        "id = 1", name="singleton_rotation_state"),)
 
     def __repr__(self):
         return f"<RotationState(current_user='{self.current_user.real_name if self.current_user else 'None'}', start_date='{self.rotation_start_date}')>"
@@ -181,7 +186,8 @@ class DatabaseManager:
         """Initialize database connection"""
         # Handle Heroku postgres:// URLs
         if database_url.startswith("postgres://"):
-            database_url = database_url.replace("postgres://", "postgresql://", 1)
+            database_url = database_url.replace(
+                "postgres://", "postgresql://", 1)
 
         self.engine = create_engine(database_url, echo=False)
         self.SessionLocal = sessionmaker(
@@ -205,7 +211,8 @@ class DatabaseManager:
         try:
             rotation_state = session.query(RotationState).first()
             if rotation_state is None:
-                rotation_state = RotationState(id=1, rotation_start_date=datetime.now())
+                rotation_state = RotationState(
+                    id=1, rotation_start_date=datetime.now())
                 session.add(rotation_state)
                 session.commit()
                 logger.info("Initialized rotation state")
