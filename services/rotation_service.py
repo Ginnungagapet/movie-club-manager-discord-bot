@@ -326,9 +326,12 @@ class RotationService:
             start_date = rotation_state.rotation_start_date
             days_since_start = (now - start_date).days
 
-            # Filter to only active users
+            # Filter to only active users - USE .is_(True)
             users = session.query(User).filter(
-                User.is_active.is_(True)).order_by(User.rotation_position).all()
+                User.is_active.is_(True),  # FIXED
+                User.rotation_position.isnot(None)  # This one is OK
+            ).order_by(User.rotation_position).all()
+
             if not users:
                 raise ValueError("No users in rotation")
 
@@ -396,22 +399,30 @@ class RotationService:
             from models.database import RotationSkip
 
             current_user, _, current_end = await self.get_current_picker()
-            users = session.query(User).order_by(User.rotation_position).all()
+
+            # Filter to only active users - USE .is_(True)
+            users = session.query(User).filter(
+                User.is_active.is_(True),  # FIXED
+                User.rotation_position.isnot(None)
+            ).order_by(User.rotation_position).all()
 
             if not users:
                 raise ValueError("No users in rotation")
 
-            # Start checking from the next position after current
+            # Eagerly load attributes
+            for user in users:
+                _ = user.real_name
+                _ = user.discord_username
+                _ = user.rotation_position
+
             check_position = (current_user.rotation_position + 1) % len(users)
             check_start = current_end
 
-            # Keep checking until we find a non-skipped period
-            attempts = 0  # Prevent infinite loop
+            attempts = 0
             while attempts < len(users) * 2:
                 check_end = check_start + timedelta(days=14)
                 check_user = users[check_position % len(users)]
 
-                # Check if this period is skipped
                 skip_exists = (
                     session.query(RotationSkip)
                     .filter(
@@ -423,14 +434,17 @@ class RotationService:
                 )
 
                 if not skip_exists:
-                    # Found the next non-skipped period
+                    # Eagerly access attributes before returning
+                    _ = check_user.id
+                    _ = check_user.real_name
+                    _ = check_user.discord_username
+
                     return check_user, check_start, check_end
 
-                # This period is skipped, move to next
                 check_position = (check_position + 1) % len(users)
+                check_start = check_end
                 attempts += 1
 
-            # Fallback (shouldn't happen)
             raise ValueError(
                 "Unable to find next picker after checking all positions")
 
