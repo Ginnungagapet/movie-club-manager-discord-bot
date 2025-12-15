@@ -328,7 +328,7 @@ class RotationService:
 
             # Filter to only active users
             users = session.query(User).filter(
-                User.is_active == True).order_by(User.rotation_position).all()
+                User.is_active.is_(True)).order_by(User.rotation_position).all()
             if not users:
                 raise ValueError("No users in rotation")
 
@@ -1097,7 +1097,7 @@ class RotationService:
             # Check if real name already exists
             existing_name = (
                 session.query(User)
-                .filter(User.real_name == real_name, User.is_active == True)
+                .filter(User.real_name == real_name, User.is_active.is_(True))
                 .first()
             )
 
@@ -1111,7 +1111,7 @@ class RotationService:
             # Get the highest rotation position among active users
             max_position_result = session.query(
                 func.max(User.rotation_position)
-            ).filter(User.is_active == True).scalar()
+            ).filter(User.is_active.is_(True)).scalar()
 
             if max_position_result is None:
                 new_position = 0
@@ -1131,7 +1131,7 @@ class RotationService:
 
             # Get total active users
             total_users = session.query(User).filter(
-                User.is_active == True).count()
+                User.is_active.is_(True)).count()
 
             # Calculate when their first turn would be
             rotation_state = session.query(RotationState).first()
@@ -1182,7 +1182,7 @@ class RotationService:
                 session.query(User)
                 .filter(
                     User.discord_username == discord_username,
-                    User.is_active == True  # Only remove active users
+                    User.is_active.is_(True)  # Only remove active users
                 )
                 .first()
             )
@@ -1193,7 +1193,7 @@ class RotationService:
                     session.query(User)
                     .filter(
                         User.discord_username == discord_username,
-                        User.is_active == False
+                        User.is_active.is_(False)
                     )
                     .first()
                 )
@@ -1253,7 +1253,7 @@ class RotationService:
                 session.query(User)
                 .filter(
                     User.rotation_position > removed_position,
-                    User.is_active == True,
+                    User.is_active.is_(True),
                 )
                 .all()
             )
@@ -1265,7 +1265,7 @@ class RotationService:
 
             # Get new total of active users
             active_users = session.query(User).filter(
-                User.is_active == True).count()
+                User.is_active.is_(True)).count()
 
             details = {
                 "removed_user": removed_name,
@@ -1321,7 +1321,7 @@ class RotationService:
                 session.query(User)
                 .filter(
                     User.discord_username == discord_username,
-                    User.is_active == False,  # Only inactive users
+                    User.is_active.is_(False),  # Only inactive users
                 )
                 .first()
             )
@@ -1332,7 +1332,7 @@ class RotationService:
                     session.query(User)
                     .filter(
                         User.discord_username == discord_username,
-                        User.is_active == True,
+                        User.is_active.is_(True),
                     )
                     .first()
                 )
@@ -1349,7 +1349,7 @@ class RotationService:
             # Get current max position among active users
             max_position = (
                 session.query(func.max(User.rotation_position))
-                .filter(User.is_active == True)
+                .filter(User.is_active.is_(True))
                 .scalar()
             )
 
@@ -1361,7 +1361,7 @@ class RotationService:
                     session.query(User)
                     .filter(
                         User.rotation_position >= position,
-                        User.is_active == True,
+                        User.is_active.is_(True),
                     )
                     .all()
                 )
@@ -1386,7 +1386,7 @@ class RotationService:
             )
 
             active_users = session.query(User).filter(
-                User.is_active == True).count()
+                User.is_active.is_(True)).count()
 
             details = {
                 "username": discord_username,
@@ -1420,7 +1420,7 @@ class RotationService:
         session = self.db.get_session()
         try:
             inactive_users = (
-                session.query(User).filter(User.is_active == False).all()
+                session.query(User).filter(User.is_active.is_(False)).all()
             )
 
             result = []
