@@ -3,18 +3,17 @@ Migration: Add is_active field to users table
 Run this once to update existing database
 """
 
-from config import get_settings
 import os
-import sys
-from sqlalchemy import create_engine, text, Boolean, Column
-
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from sqlalchemy import create_engine, text
 
 
 def migrate():
-    settings = get_settings()
-    database_url = settings.database_url
+    # Get database URL from environment variable
+    database_url = os.environ.get('DATABASE_URL')
+
+    if not database_url:
+        print("❌ DATABASE_URL environment variable not set")
+        return
 
     # Handle Heroku postgres:// URLs
     if database_url.startswith("postgres://"):
